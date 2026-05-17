@@ -28,6 +28,18 @@ test('compress endpoint validates pdf upload', function (): void {
         ->assertJsonValidationErrors(['pdf']);
 });
 
+test('compress endpoint rejects pdfs larger than 30 mb', function (): void {
+    $response = $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/compress', [
+            'pdf' => UploadedFile::fake()->create('oversized.pdf', 30721, 'application/pdf'),
+        ]);
+
+    $response
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['pdf']);
+});
+
 test('compress endpoint returns a pdf response', function (): void {
     $this->mock(PdfCompressor::class, function (MockInterface $mock): void {
         $mock->shouldReceive('compress')
@@ -62,6 +74,19 @@ test('watermark and compress endpoint validates watermark text', function (): vo
     $response
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['watermark_text']);
+});
+
+test('watermark and compress endpoint rejects pdfs larger than 30 mb', function (): void {
+    $response = $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/watermark-compress', [
+            'pdf' => UploadedFile::fake()->create('oversized.pdf', 30721, 'application/pdf'),
+            'watermark_text' => 'DIU Question Bank',
+        ]);
+
+    $response
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['pdf']);
 });
 
 test('watermark and compress endpoint returns a pdf response', function (): void {

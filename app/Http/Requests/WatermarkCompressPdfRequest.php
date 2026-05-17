@@ -22,7 +22,7 @@ class WatermarkCompressPdfRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'pdf' => ['required', 'file', 'mimetypes:application/pdf,application/x-pdf'],
+            'pdf' => ['required', 'file', 'mimetypes:application/pdf,application/x-pdf', 'max:30720'],
             'watermark_text' => ['required', 'string', 'max:255'],
         ];
     }
