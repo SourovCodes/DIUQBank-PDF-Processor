@@ -32,7 +32,7 @@ test('custom 403 page is branded', function (): void {
     $response
         ->assertForbidden()
         ->assertSee('Access denied')
-        ->assertSee('DIUQBank Helper');
+        ->assertSee('DIUQBank PDF Processor');
 });
 
 test('fallback 4xx error page is used for other client errors', function (): void {
@@ -47,7 +47,7 @@ test('fallback 4xx error page is used for other client errors', function (): voi
     $response
         ->assertStatus(418)
         ->assertSee('Request could not be completed')
-        ->assertSee('DIUQBank Helper');
+        ->assertSee('DIUQBank PDF Processor');
 });
 
 test('custom 500 page is branded', function (): void {

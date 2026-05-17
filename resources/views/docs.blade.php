@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DIUQBank PDF Helper API</title>
+    <title>DIUQBank PDF Processor API</title>
 </head>
 <body>
     <script id="api-reference" data-url="/openapi.yaml"></script>

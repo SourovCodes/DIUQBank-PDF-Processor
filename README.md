@@ -105,4 +105,4 @@ php artisan test --compact tests/Feature/PdfApiTest.php tests/Feature/WebPagesTe
 
 - API validation and auth errors return JSON responses.
 - Successful processing responses return `application/pdf` output directly.
-- The error pages are branded for the DIUQBank helper site and point users back to the docs and https://diuqbank.com.
+- The error pages are branded for the DIUQBank PDF Processor site and point users back to the docs and https://diuqbank.com.

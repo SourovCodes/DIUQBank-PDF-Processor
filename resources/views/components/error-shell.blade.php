@@ -9,64 +9,191 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ $status }} | DIUQBank PDF Helper</title>
-    @vite(['resources/css/app.css'])
+    <title>{{ $status }} | DIUQBank PDF Processor</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --page-bg: #f6f6f7;
+            --panel-bg: #ffffff;
+            --panel-border: #e6e7eb;
+            --text: #111827;
+            --muted: #6b7280;
+            --soft: #9ca3af;
+            --accent: #111827;
+            --accent-contrast: #ffffff;
+            --accent-hover: #1f2937;
+            --accent-hover-contrast: #ffffff;
+            --accent-soft: #f3f4f6;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --page-bg: #0f1115;
+                --panel-bg: #171a20;
+                --panel-border: #2a2f39;
+                --text: #f3f4f6;
+                --muted: #b0b6c3;
+                --soft: #7d8596;
+                --accent: #f3f4f6;
+                --accent-contrast: #111827;
+                --accent-hover: #e5e7eb;
+                --accent-hover-contrast: #111827;
+                --accent-soft: #20242c;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            min-height: 100%;
+            background: var(--page-bg);
+            color: var(--text);
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 20px;
+        }
+
+        .shell {
+            width: min(760px, 100%);
+        }
+
+        .panel {
+            border: 1px solid var(--panel-border);
+            border-radius: 20px;
+            background: var(--panel-bg);
+            padding: 28px;
+            box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+        }
+
+        .brand {
+            margin: 0 0 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .status {
+            margin: 0 0 20px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--soft);
+        }
+
+        .title {
+            margin: 0;
+            font-size: clamp(2rem, 4vw, 3rem);
+            line-height: 1.02;
+            letter-spacing: -0.04em;
+        }
+
+        .summary {
+            margin: 16px 0 0;
+            max-width: 58ch;
+            font-size: 1rem;
+            line-height: 1.7;
+            color: var(--muted);
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 28px;
+        }
+
+        .link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0 18px;
+            border-radius: 999px;
+            border: 1px solid var(--panel-border);
+            color: var(--text);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 600;
+            transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+        }
+
+        .link.primary {
+            border-color: var(--accent);
+            background: var(--accent);
+            color: var(--accent-contrast);
+        }
+
+        .link.secondary {
+            background: var(--accent-soft);
+        }
+
+        .link:hover {
+            border-color: #cfd3da;
+            background: #eeeeef;
+        }
+
+        .link.primary:hover {
+            border-color: var(--accent-hover);
+            background: var(--accent-hover);
+            color: var(--accent-hover-contrast);
+        }
+
+        .meta {
+            margin-top: 28px;
+            padding-top: 18px;
+            border-top: 1px solid var(--panel-border);
+            font-size: 0.92rem;
+            line-height: 1.7;
+            color: var(--muted);
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 20px 16px;
+            }
+
+            .panel {
+                border-radius: 16px;
+                padding: 22px;
+            }
+
+            .actions {
+                flex-direction: column;
+            }
+
+            .link {
+                width: 100%;
+            }
+        }
+    </style>
 </head>
-<body class="min-h-screen bg-linear-to-br from-amber-50 via-stone-50 to-cyan-100 text-stone-950">
-    <div class="relative isolate overflow-hidden">
-        <div class="absolute -top-24 left-0 h-72 w-72 rounded-full bg-amber-300/40 blur-3xl"></div>
-        <div class="absolute right-0 top-1/3 h-80 w-80 rounded-full bg-cyan-300/35 blur-3xl"></div>
+<body>
+    <main class="shell">
+        <section class="panel">
+            <p class="brand">DIUQBank PDF Processor</p>
+            <p class="status">{{ $status }}</p>
+            <h1 class="title">{{ $title }}</h1>
+            <p class="summary">{{ $summary }}</p>
 
-        <main class="mx-auto flex min-h-screen max-w-6xl items-center px-6 py-12">
-            <div class="grid w-full gap-8 overflow-hidden rounded-[2rem] border border-stone-900/10 bg-white/85 p-8 shadow-2xl shadow-stone-900/10 backdrop-blur md:grid-cols-[1.15fr_0.85fr] md:p-12">
-                <section class="flex flex-col gap-6">
-                    <p class="text-xs font-semibold uppercase tracking-[0.35em] text-cyan-700">DIUQBank Helper</p>
-                    <div class="flex flex-col gap-3">
-                        <p class="text-6xl font-black tracking-tight text-stone-950 md:text-8xl">{{ $status }}</p>
-                        <h1 class="max-w-2xl text-3xl font-semibold tracking-tight text-stone-900 md:text-5xl">{{ $title }}</h1>
-                        <p class="max-w-2xl text-base leading-7 text-stone-600 md:text-lg">{{ $summary }}</p>
-                    </div>
-
-                    <div class="flex flex-col gap-3 sm:flex-row">
-                        <a
-                            class="inline-flex items-center justify-center rounded-full bg-stone-950 px-6 py-3 text-sm font-semibold text-white transition hover:bg-stone-800"
-                            href="{{ route('docs') }}"
-                        >
-                            Open API docs
-                        </a>
-
-                        <a
-                            class="inline-flex items-center justify-center rounded-full border border-stone-900/15 bg-white px-6 py-3 text-sm font-semibold text-stone-900 transition hover:border-stone-900/30 hover:bg-stone-50"
-                            href="https://diuqbank.com"
-                            rel="noreferrer"
-                            target="_blank"
-                        >
-                            Visit diuqbank.com
-                        </a>
-                    </div>
-
-                    <p class="max-w-2xl text-sm leading-6 text-stone-500">
-                        This helper service powers PDF compression and watermarking for the DIU Question Bank ecosystem.
-                    </p>
-                </section>
-
-                <aside class="flex flex-col justify-between gap-8 rounded-[1.5rem] bg-stone-950 p-6 text-stone-50 md:p-8">
-                    <div class="space-y-4">
-                        <p class="text-xs font-semibold uppercase tracking-[0.3em] text-amber-300">What this service does</p>
-                        <div class="space-y-3 text-sm leading-6 text-stone-300">
-                            <p>Compress uploaded PDFs with Ghostscript using the ebook preset.</p>
-                            <p>Apply the DIUQBank-style header watermark, then compress the final output.</p>
-                            <p>Expose a small backend-only API and a public Scalar reference for integrators.</p>
-                        </div>
-                    </div>
-
-                    <div class="rounded-[1.25rem] border border-white/10 bg-white/5 p-4">
-                        <p class="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300">Recovery path</p>
-                        <p class="mt-3 text-sm leading-6 text-stone-300">If you landed here by mistake, start with the API documentation or head back to the main question bank site.</p>
-                    </div>
-                </aside>
+            <div class="actions">
+                <a class="link primary" href="{{ route('docs') }}">Open API docs</a>
+                <a class="link secondary" href="https://diuqbank.com" rel="noreferrer" target="_blank">Visit diuqbank.com</a>
             </div>
-        </main>
-    </div>
+
+            <p class="meta">
+                This processor service powers PDF compression and watermarking for the DIU Question Bank platform.
+            </p>
+        </section>
+    </main>
 </body>
 </html>
