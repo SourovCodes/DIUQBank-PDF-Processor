@@ -1,7 +1,7 @@
 <?php
 
-test('the application returns a successful response', function () {
+test('the homepage redirects to the docs page', function () {
     $response = $this->get('/');
 
-    $response->assertStatus(200);
+    $response->assertRedirect('/docs');
 });
