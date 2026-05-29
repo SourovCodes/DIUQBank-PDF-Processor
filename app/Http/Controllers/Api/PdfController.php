@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CompressPdfRequest;
+use App\Http\Requests\ExtractPdfPagesRequest;
 use App\Http\Requests\WatermarkCompressPdfRequest;
 use App\Support\PdfCompression\PdfCompressor;
 use Closure;
@@ -41,6 +42,24 @@ class PdfController extends Controller
             outputFilename: $this->outputFilename($uploadedPdf, 'watermarked-compressed'),
             processor: static function (string $inputPath, string $outputPath) use ($compressor, $watermarkText): void {
                 $compressor->compressWithWatermark($inputPath, $outputPath, $watermarkText);
+            },
+        );
+    }
+
+    public function extractPages(ExtractPdfPagesRequest $request, PdfCompressor $compressor): Response
+    {
+        /** @var UploadedFile $uploadedPdf */
+        $uploadedPdf = $request->file('pdf');
+
+        /** @var array<int, int> $rawPages */
+        $rawPages = $request->validated()['pages'];
+        $pages = array_values(array_unique(array_map('intval', $rawPages)));
+
+        return $this->processPdf(
+            uploadedPdf: $uploadedPdf,
+            outputFilename: $this->outputFilename($uploadedPdf, 'extracted'),
+            processor: static function (string $inputPath, string $outputPath) use ($compressor, $pages): void {
+                $compressor->extractPages($inputPath, $outputPath, $pages);
             },
         );
     }

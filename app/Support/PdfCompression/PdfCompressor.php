@@ -47,6 +47,58 @@ class PdfCompressor
         }
     }
 
+    /**
+     * @param  array<int, int>  $pages  1-indexed page numbers in desired output order, already deduped
+     */
+    public function extractPages(string $inputPath, string $outputPath, array $pages): void
+    {
+        $this->ensureFileExists($inputPath);
+
+        if ($pages === []) {
+            throw new RuntimeException('At least one page must be requested.');
+        }
+
+        try {
+            $pdf = new Fpdi;
+            $pdf->SetMargins(0, 0, 0);
+            $pdf->SetAutoPageBreak(false);
+
+            $sourcePageCount = $pdf->setSourceFile($inputPath);
+
+            foreach ($pages as $page) {
+                if ($page < 1 || $page > $sourcePageCount) {
+                    throw new RuntimeException(sprintf(
+                        'Requested page %d is out of range (document has %d pages).',
+                        $page,
+                        $sourcePageCount,
+                    ));
+                }
+            }
+
+            foreach ($pages as $page) {
+                $templateId = $pdf->importPage($page);
+                $size = $pdf->getTemplateSize($templateId);
+
+                $pageWidth = (float) $size['width'];
+                $pageHeight = (float) $size['height'];
+                $orientation = $pageWidth > $pageHeight ? 'L' : 'P';
+
+                $pdf->AddPage($orientation, [$pageWidth, $pageHeight]);
+                $pdf->useTemplate($templateId, 0, 0, $pageWidth, $pageHeight);
+            }
+
+            $pdf->Output('F', $outputPath);
+        } catch (RuntimeException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            throw new RuntimeException(
+                'FPDI page extraction failed: '.$exception->getMessage(),
+                0,
+                $exception,
+            );
+        }
+    }
+
     public function compressWithWatermark(string $inputPath, string $outputPath, string $watermarkText): void
     {
         $this->ensureGhostscriptAvailable();
