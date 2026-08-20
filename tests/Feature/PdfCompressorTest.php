@@ -1,11 +1,15 @@
 <?php
 
 use App\Support\PdfCompression\PdfCompressor;
+use App\Support\PdfCompression\PdfImageAudit;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use setasign\Fpdi\Fpdi;
 use setasign\Fpdi\PdfParser\PdfParser;
 use setasign\Fpdi\PdfParser\StreamReader;
+use setasign\Fpdi\PdfParser\Type\PdfDictionary;
+use setasign\Fpdi\PdfParser\Type\PdfName;
+use setasign\Fpdi\PdfParser\Type\PdfType;
 use setasign\Fpdi\PdfReader\PdfReader;
 
 beforeEach(function (): void {
@@ -203,3 +207,168 @@ function ghostscriptIsInstalled(): bool
 {
     return Process::run(['gs', '--version'])->successful();
 }
+
+/**
+ * Build a one-page document holding a single image in a calibrated colour space
+ * with a soft mask, mirroring the structure iOS' Quartz PDFContext produces for
+ * scans. CalRGB stands in for the scans' ICCBased space: it triggers the same
+ * Ghostscript colour-managed path without needing an embedded profile.
+ *
+ * FPDI cannot author images, so the file is assembled by hand.
+ */
+function makePdfWithImage(string $path, int $bitsPerComponent): string
+{
+    $width = 60;
+    $height = 80;
+    $row = '';
+    $maskRow = '';
+
+    for ($x = 0; $x < $width; $x++) {
+        $sample = intdiv(255 * $x, $width - 1);
+
+        if ($bitsPerComponent === 16) {
+            $row .= pack('n3', $sample * 257, 32768, 16384);
+            $maskRow .= pack('n', 65535);
+        } else {
+            $row .= chr($sample).chr(128).chr(64);
+            $maskRow .= chr(255);
+        }
+    }
+
+    $samples = gzcompress(str_repeat($row, $height), 6);
+    $mask = gzcompress(str_repeat($maskRow, $height), 6);
+    $contents = 'q 288 0 0 432 0 0 cm /Im0 Do Q';
+    $colourSpace = '[/CalRGB << /WhitePoint [0.9505 1 1.089] /Gamma [2.2 2.2 2.2] '
+        .'/Matrix [0.4124 0.2126 0.0193 0.3576 0.7152 0.1192 0.1805 0.0722 0.9505] >>]';
+
+    $objects = [
+        1 => '<< /Type /Catalog /Pages 2 0 R >>',
+        2 => '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        3 => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 288 432] '
+            .'/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>',
+        4 => sprintf("<< /Length %d >>\nstream\n%s\nendstream", strlen($contents), $contents),
+        5 => sprintf(
+            '<< /Type /XObject /Subtype /Image /Width %d /Height %d /Interpolate true '
+            .'/ColorSpace %s /Intent /Perceptual /SMask 6 0 R /BitsPerComponent %d '
+            ."/Length %d /Filter /FlateDecode >>\nstream\n%s\nendstream",
+            $width, $height, $colourSpace, $bitsPerComponent, strlen($samples), $samples,
+        ),
+        6 => sprintf(
+            '<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray '
+            ."/BitsPerComponent %d /Length %d /Filter /FlateDecode >>\nstream\n%s\nendstream",
+            $width, $height, $bitsPerComponent, strlen($mask), $mask,
+        ),
+    ];
+
+    $pdf = "%PDF-1.3\n";
+    $offsets = [];
+
+    foreach ($objects as $number => $body) {
+        $offsets[$number] = strlen($pdf);
+        $pdf .= $number." 0 obj\n".$body."\nendobj\n";
+    }
+
+    $startXref = strlen($pdf);
+    $size = count($objects) + 1;
+    $pdf .= "xref\n0 ".$size."\n0000000000 65535 f \n";
+
+    for ($number = 1; $number < $size; $number++) {
+        $pdf .= sprintf("%010d 00000 n \n", $offsets[$number]);
+    }
+
+    $pdf .= "trailer\n<< /Size ".$size." /Root 1 0 R >>\nstartxref\n".$startXref."\n%%EOF\n";
+
+    file_put_contents($path, $pdf);
+
+    return $path;
+}
+
+/**
+ * Names of the image XObjects a page draws with.
+ *
+ * @return array<int, string>
+ */
+function imageXObjectNames(string $path, int $page): array
+{
+    $parser = new PdfParser(StreamReader::createByFile($path));
+    $reader = new PdfReader($parser);
+
+    $resources = PdfType::resolve($reader->getPage($page)->getAttribute('Resources'), $parser);
+    $xObjects = PdfType::resolve(PdfDictionary::get($resources, 'XObject'), $parser);
+
+    if (! $xObjects instanceof PdfDictionary) {
+        return [];
+    }
+
+    $names = [];
+
+    foreach ($xObjects->value as $name => $reference) {
+        $dictionary = PdfType::resolve($reference, $parser)->value;
+        $subtype = PdfType::resolve(PdfDictionary::get($dictionary, 'Subtype'), $parser);
+
+        if ($subtype instanceof PdfName && $subtype->value === 'Image') {
+            $names[] = (string) $name;
+        }
+    }
+
+    return $names;
+}
+
+test('sixteen bit images are detected', function (): void {
+    $audit = new PdfImageAudit;
+
+    expect($audit->hasSixteenBitImages(makePdfWithImage($this->workspace.'/deep.pdf', 16)))->toBeTrue()
+        ->and($audit->hasSixteenBitImages(makePdfWithImage($this->workspace.'/normal.pdf', 8)))->toBeFalse();
+});
+
+test('an unreadable document is not treated as holding sixteen bit images', function (): void {
+    $path = $this->workspace.'/broken.pdf';
+    file_put_contents($path, '%PDF-1.4 not really a pdf');
+
+    expect((new PdfImageAudit)->hasSixteenBitImages($path))->toBeFalse();
+});
+
+test('colour conversion is skipped for documents holding sixteen bit images', function (): void {
+    fakeGhostscript($this->workspace);
+
+    app(PdfCompressor::class)->compress(
+        makePdfWithImage($this->workspace.'/deep.pdf', 16),
+        $this->workspace.'/out.pdf',
+    );
+
+    $invocation = ghostscriptInvocations($this->workspace)[0];
+
+    expect($invocation)->toContain('-dColorConversionStrategy=/LeaveColorUnchanged')
+        // The preset installs its own sRGB conversion, so the override must follow it.
+        ->and(strpos($invocation, '-dPDFSETTINGS='))
+        ->toBeLessThan(strpos($invocation, '-dColorConversionStrategy='));
+});
+
+test('colour conversion is left alone for ordinary documents', function (): void {
+    fakeGhostscript($this->workspace);
+
+    app(PdfCompressor::class)->compress(
+        makePdfWithImage($this->workspace.'/normal.pdf', 8),
+        $this->workspace.'/out.pdf',
+    );
+
+    expect(ghostscriptInvocations($this->workspace)[0])->not->toContain('-dColorConversionStrategy=');
+});
+
+test('a sixteen bit image survives compression instead of leaving a blank page', function (): void {
+    $input = makePdfWithImage($this->workspace.'/deep.pdf', 16);
+    $output = $this->workspace.'/out.pdf';
+
+    app(PdfCompressor::class)->compress($input, $output);
+
+    expect(imageXObjectNames($output, 1))->not->toBeEmpty();
+})->skip(fn (): bool => ! ghostscriptIsInstalled(), 'Ghostscript is not installed.');
+
+test('a sixteen bit image survives watermarking and compression', function (): void {
+    $input = makePdfWithImage($this->workspace.'/deep.pdf', 16);
+    $output = $this->workspace.'/out.pdf';
+
+    app(PdfCompressor::class)->compressWithWatermark($input, $output, 'DIUQBank.com');
+
+    expect(imageXObjectNames($output, 1))->not->toBeEmpty();
+})->skip(fn (): bool => ! ghostscriptIsInstalled(), 'Ghostscript is not installed.');

@@ -12,7 +12,10 @@ use Throwable;
 
 class PdfCompressor
 {
-    public function __construct(private readonly PdfPageGeometry $geometry = new PdfPageGeometry) {}
+    public function __construct(
+        private readonly PdfPageGeometry $geometry = new PdfPageGeometry,
+        private readonly PdfImageAudit $imageAudit = new PdfImageAudit,
+    ) {}
 
     public function compress(string $inputPath, string $outputPath): void
     {
@@ -215,6 +218,7 @@ class PdfCompressor
             ...$this->baseArguments(),
             '-dCompatibilityLevel=1.4',
             sprintf('-dPDFSETTINGS=/%s', (string) config('pdf.ghostscript.preset')),
+            ...$this->colourConversionArguments($inputPath),
             '-dDownsampleColorImages=true',
             '-dColorImageDownsampleType=/Bicubic',
             sprintf('-dColorImageResolution=%d', $resolution),
@@ -228,6 +232,32 @@ class PdfCompressor
             sprintf('-dMonoImageResolution=%d', $monoResolution),
             '-dMonoImageDownsampleThreshold=1.0',
         ];
+    }
+
+    /**
+     * Opt out of colour conversion for documents Ghostscript would mangle.
+     *
+     * The /ebook and /screen presets convert everything to sRGB, and that
+     * conversion silently drops an image that stores 16 bits per component,
+     * carries a soft mask and lives in a calibrated colour space (ICCBased,
+     * CalRGB, Lab) — all three together, which is exactly what iOS scans
+     * produce. Ghostscript reports success and writes the page out blank, so
+     * nothing downstream notices. Device colour spaces skip colour management
+     * and are unaffected, so only the bit depth is worth testing for: it is the
+     * cheap half of the condition and 16-bit images are rare enough that the
+     * output size given up here costs almost nothing.
+     *
+     * @return array<int, string>
+     */
+    private function colourConversionArguments(string $inputPath): array
+    {
+        if (! $this->imageAudit->hasSixteenBitImages($inputPath)) {
+            return [];
+        }
+
+        Log::info('Document contains 16-bit images; skipping Ghostscript colour conversion.');
+
+        return ['-dColorConversionStrategy=/LeaveColorUnchanged'];
     }
 
     /**
