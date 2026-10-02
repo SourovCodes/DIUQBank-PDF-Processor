@@ -372,3 +372,26 @@ test('a sixteen bit image survives watermarking and compression', function (): v
 
     expect(imageXObjectNames($output, 1))->not->toBeEmpty();
 })->skip(fn (): bool => ! ghostscriptIsInstalled(), 'Ghostscript is not installed.');
+
+test('credit watermarking adds the header and faint watermark stamps', function (): void {
+    $input = makePdf($this->workspace.'/a4.pdf', 210.0, 297.0);
+    $output = $this->workspace.'/out.pdf';
+
+    app(PdfCompressor::class)->compressWithCreditAndWatermark($input, $output, 'Uploaded by Sourov', 'DIUQBank.com');
+
+    $parser = new PdfParser(StreamReader::createByFile($output));
+    $page = (new PdfReader($parser))->getPage(1);
+    [$width, $height] = $page->getWidthAndHeight();
+
+    $resources = PdfType::resolve($page->getAttribute('Resources'), $parser);
+    $extGStates = PdfType::resolve(PdfDictionary::get($resources, 'ExtGState'), $parser);
+    $opacities = collect($extGStates->value)
+        ->map(fn (PdfType $state): mixed => PdfType::resolve(PdfDictionary::get(PdfType::resolve($state, $parser), 'ca'), $parser)?->value)
+        ->filter()
+        ->values();
+
+    expect($width)->toEqualWithDelta(595.3, 0.5)
+        ->and($height - 841.9)->toEqualWithDelta(8 / 25.4 * 72, 0.5)
+        ->and($opacities->all())->toContain(0.05)
+        ->and($page->getContentStream())->toContain('cm');
+})->skip(fn (): bool => ! ghostscriptIsInstalled(), 'Ghostscript is not installed.');

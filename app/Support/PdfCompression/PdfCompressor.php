@@ -5,6 +5,7 @@ namespace App\Support\PdfCompression;
 use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Random\Randomizer;
 use RuntimeException;
 use setasign\Fpdi\Fpdi;
 use Symfony\Component\Process\Exception\ProcessSignaledException;
@@ -15,6 +16,7 @@ class PdfCompressor
     public function __construct(
         private readonly PdfPageGeometry $geometry = new PdfPageGeometry,
         private readonly PdfImageAudit $imageAudit = new PdfImageAudit,
+        private readonly Randomizer $randomizer = new Randomizer,
     ) {}
 
     public function compress(string $inputPath, string $outputPath): void
@@ -45,6 +47,20 @@ class PdfCompressor
 
     public function compressWithWatermark(string $inputPath, string $outputPath, string $watermarkText): void
     {
+        $this->compressWithOverlay($inputPath, $outputPath, $watermarkText, null);
+    }
+
+    /**
+     * Add the credit header above every page, scatter faint watermark stamps
+     * across the page content, then compress the result.
+     */
+    public function compressWithCreditAndWatermark(string $inputPath, string $outputPath, string $creditText, string $watermarkText): void
+    {
+        $this->compressWithOverlay($inputPath, $outputPath, $creditText, $watermarkText);
+    }
+
+    private function compressWithOverlay(string $inputPath, string $outputPath, string $headerText, ?string $stampText): void
+    {
         $this->ensureGhostscriptAvailable();
         $this->ensureFileExists($inputPath);
 
@@ -53,7 +69,7 @@ class PdfCompressor
         try {
             $this->withRepairFallback(
                 $inputPath,
-                fn (string $sourcePath) => $this->addWatermarkWithFpdi($sourcePath, $watermarkedPath, $watermarkText),
+                fn (string $sourcePath) => $this->addWatermarkWithFpdi($sourcePath, $watermarkedPath, $headerText, $stampText),
                 'watermarking',
             );
 
@@ -359,7 +375,7 @@ class PdfCompressor
         $pdf->Output('F', $outputPath);
     }
 
-    private function addWatermarkWithFpdi(string $inputPath, string $outputPath, string $watermarkText): void
+    private function addWatermarkWithFpdi(string $inputPath, string $outputPath, string $headerText, ?string $stampText): void
     {
         $pdf = $this->newDocument();
         $pageCount = $pdf->setSourceFile($inputPath);
@@ -375,8 +391,12 @@ class PdfCompressor
             $totalHeight = $pageHeight + $header->heightMm;
 
             $pdf->AddPage($pageWidth > $totalHeight ? 'L' : 'P', [$pageWidth, $totalHeight]);
-            $this->drawWatermarkHeader($pdf, $header, $watermarkText);
+            $this->drawWatermarkHeader($pdf, $header, $headerText);
             $pdf->useTemplate($templateId, 0, $header->heightMm, $pageWidth, $pageHeight);
+
+            if ($stampText !== null) {
+                $this->drawWatermarkStamps($pdf, new WatermarkStamp($pageWidth, $pageHeight), $header->heightMm, $stampText);
+            }
         }
 
         $pdf->Output('F', $outputPath);
@@ -406,6 +426,37 @@ class PdfCompressor
     }
 
     /**
+     * Scatter the watermark over the imported page, offset below the header.
+     */
+    private function drawWatermarkStamps(StampablePdf $pdf, WatermarkStamp $stamp, float $offsetY, string $text): void
+    {
+        $placements = $stamp->placements(
+            $this->toCoreFontEncoding($text),
+            function (string $candidate, float $fontSize) use ($pdf): float {
+                $pdf->SetFont('Arial', 'B', $fontSize);
+
+                return $pdf->GetStringWidth($candidate);
+            },
+            $this->randomizer,
+        );
+
+        $greyLevel = (int) config('pdf.watermark.stamp.grey_level');
+        $opacity = (float) config('pdf.watermark.stamp.opacity');
+
+        foreach ($placements as $placement) {
+            $pdf->SetFont('Arial', 'B', $placement['fontSize']);
+            $pdf->SetTextColor($greyLevel, $greyLevel, $greyLevel);
+            $pdf->rotatedText(
+                $placement['text'],
+                $placement['x'],
+                $offsetY + $placement['y'],
+                $placement['angleDegrees'],
+                $opacity,
+            );
+        }
+    }
+
+    /**
      * FPDF's built-in fonts only cover Windows-1252, so anything outside it is
      * transliterated (or dropped) instead of being written as mojibake.
      */
@@ -420,9 +471,9 @@ class PdfCompressor
         return $converted === false ? preg_replace('/[^\x20-\x7E]/', '', $text) ?? '' : $converted;
     }
 
-    private function newDocument(): Fpdi
+    private function newDocument(): StampablePdf
     {
-        $pdf = new Fpdi;
+        $pdf = new StampablePdf;
         $pdf->SetMargins(0, 0, 0);
         $pdf->SetAutoPageBreak(false);
 

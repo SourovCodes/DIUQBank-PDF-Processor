@@ -2,12 +2,13 @@
 
 This project is a small Laravel backend that supports the DIU Question Bank platform at https://diuqbank.com.
 
-It exposes two PDF-processing endpoints behind a single API key and publishes OpenAPI documentation through Scalar. The website surface is intentionally minimal: the homepage redirects to the docs page, and branded error pages guide users back to the docs or the main DIUQBank website.
+It exposes PDF-processing endpoints behind a single API key and publishes OpenAPI documentation through Scalar. The website surface is intentionally minimal: the homepage redirects to the docs page, and branded error pages guide users back to the docs or the main DIUQBank website.
 
 ## Features
 
 - Compress a PDF with Ghostscript using the `ebook` preset.
 - Add a DIUQBank-style header watermark to every page, then compress the PDF.
+- Add a credit header plus a faint watermark stamp at a random position and angle on every page, then compress the PDF.
 - Protect API endpoints with an `X-API-Key` header from `.env`.
 - Publish public API reference docs at `/docs` using Scalar and `/openapi.yaml`.
 - Avoid queues and database requirements for the core API flow.
@@ -18,6 +19,7 @@ It exposes two PDF-processing endpoints behind a single API key and publishes Op
 | --- | --- | --- |
 | `POST` | `/api/pdfs/compress` | Accepts a `pdf` upload and returns a compressed PDF. |
 | `POST` | `/api/pdfs/watermark-compress` | Accepts a `pdf` upload and `watermark_text`, then returns the watermarked and compressed PDF. |
+| `POST` | `/api/pdfs/credit-watermark-compress` | Accepts a `pdf` upload, `credit_text` (header) and `watermark_text` (faint stamp at a random position and angle), then returns the watermarked and compressed PDF. |
 
 All API requests must include:
 
@@ -94,6 +96,17 @@ curl -X POST http://127.0.0.1:8000/api/pdfs/watermark-compress \
 	-H "X-API-Key: change-this" \
 	-F "pdf=@/absolute/path/to/file.pdf" \
 	-F "watermark_text=For more questions: https://diuqbank.com" \
+	--output watermarked-compressed.pdf
+```
+
+Add a credit header and a randomly placed watermark, then compress a PDF:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/pdfs/credit-watermark-compress \
+	-H "X-API-Key: change-this" \
+	-F "pdf=@/absolute/path/to/file.pdf" \
+	-F "credit_text=Uploaded by Jane Doe | https://diuqbank.com" \
+	-F "watermark_text=DIUQBank.com" \
 	--output watermarked-compressed.pdf
 ```
 

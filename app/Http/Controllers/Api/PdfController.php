@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CompressPdfRequest;
+use App\Http\Requests\CreditWatermarkCompressPdfRequest;
 use App\Http\Requests\ExtractPdfPagesRequest;
 use App\Http\Requests\WatermarkCompressPdfRequest;
 use App\Support\PdfCompression\PdfCompressor;
@@ -42,6 +43,22 @@ class PdfController extends Controller
             outputFilename: $this->outputFilename($uploadedPdf, 'watermarked-compressed'),
             processor: static function (string $inputPath, string $outputPath) use ($compressor, $watermarkText): void {
                 $compressor->compressWithWatermark($inputPath, $outputPath, $watermarkText);
+            },
+        );
+    }
+
+    public function creditWatermarkAndCompress(CreditWatermarkCompressPdfRequest $request, PdfCompressor $compressor): Response
+    {
+        /** @var UploadedFile $uploadedPdf */
+        $uploadedPdf = $request->file('pdf');
+        $creditText = trim((string) $request->validated()['credit_text']);
+        $watermarkText = trim((string) $request->validated()['watermark_text']);
+
+        return $this->processPdf(
+            uploadedPdf: $uploadedPdf,
+            outputFilename: $this->outputFilename($uploadedPdf, 'watermarked-compressed'),
+            processor: static function (string $inputPath, string $outputPath) use ($compressor, $creditText, $watermarkText): void {
+                $compressor->compressWithCreditAndWatermark($inputPath, $outputPath, $creditText, $watermarkText);
             },
         );
     }

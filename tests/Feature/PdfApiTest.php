@@ -115,6 +115,51 @@ test('watermark and compress endpoint returns a pdf response', function (): void
         ->assertContent('%PDF-1.4 watermarked');
 });
 
+test('credit watermark endpoint requires api key', function (): void {
+    $this->post('/api/pdfs/credit-watermark-compress')->assertUnauthorized();
+});
+
+test('credit watermark endpoint validates credit and watermark text', function (): void {
+    $response = $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/credit-watermark-compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+            'watermark_text' => str_repeat('a', 101),
+        ]);
+
+    $response
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['credit_text', 'watermark_text']);
+});
+
+test('credit watermark endpoint returns a pdf response', function (): void {
+    $this->mock(PdfCompressor::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('compressWithCreditAndWatermark')
+            ->once()
+            ->andReturnUsing(function (string $inputPath, string $outputPath, string $creditText, string $watermarkText): void {
+                expect(file_exists($inputPath))->toBeTrue()
+                    ->and($creditText)->toBe('Uploaded by Sourov')
+                    ->and($watermarkText)->toBe('DIUQBank.com');
+
+                file_put_contents($outputPath, '%PDF-1.4 credited');
+            });
+    });
+
+    $response = $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/credit-watermark-compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+            'credit_text' => '  Uploaded by Sourov ',
+            'watermark_text' => 'DIUQBank.com',
+        ]);
+
+    $response
+        ->assertOk()
+        ->assertHeader('content-type', 'application/pdf')
+        ->assertHeader('content-disposition', 'attachment; filename="source-watermarked-compressed.pdf"')
+        ->assertContent('%PDF-1.4 credited');
+});
+
 test('extract pages endpoint requires api key', function (): void {
     $response = $this->post('/api/pdfs/extract-pages');
 

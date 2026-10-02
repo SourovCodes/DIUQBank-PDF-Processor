@@ -59,5 +59,32 @@ return [
         'min_font_size' => 5.0,
         'side_padding_ratio' => 2 / 210,
         'min_side_padding_mm' => 1.0,
+
+        /*
+        |----------------------------------------------------------------------
+        | Scattered stamps
+        |----------------------------------------------------------------------
+        |
+        | Stamps are drawn over the page content at a very low opacity, so they
+        | barely register while reading yet prove where a copied paper came
+        | from. Drawing beneath the content would hide them behind full-page
+        | scans. Each page is split into `stamps_per_page` horizontal bands and
+        | every band gets one stamp at a random position and tilt, so there is
+        | no fixed spot to cover up (one band, the whole page, by default). The font size scales with the shorter side
+        | of the page: 36pt on A4.
+        |
+        */
+
+        'stamp' => [
+            'stamps_per_page' => (int) env('PDF_WATERMARK_STAMPS_PER_PAGE', 1),
+            'min_angle_degrees' => 15.0,
+            'max_angle_degrees' => 65.0,
+            'opacity' => (float) env('PDF_WATERMARK_OPACITY', 0.05),
+            'grey_level' => 120,
+            'font_size_per_mm' => 36 / 210,
+            'min_font_size' => 8.0,
+            'max_font_size' => 120.0,
+            'coverage' => 0.9,
+        ],
     ],
 ];
