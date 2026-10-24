@@ -706,15 +706,13 @@ class PdfCompressor
      */
     private function drawWatermarkStamps(StampablePdf $pdf, WatermarkStamp $stamp, float $offsetY, string $text): void
     {
-        $placements = $stamp->placements(
-            $this->toCoreFontEncoding($text),
-            function (string $candidate, float $fontSize) use ($pdf): float {
-                $pdf->SetFont('Arial', 'B', $fontSize);
+        $measure = function (string $candidate, float $fontSize) use ($pdf): float {
+            $pdf->SetFont('Arial', 'B', $fontSize);
 
-                return $pdf->GetStringWidth($candidate);
-            },
-            $this->randomizer,
-        );
+            return $pdf->GetStringWidth($candidate);
+        };
+
+        $placements = $stamp->placements($this->toCoreFontEncoding($text), $measure, $this->randomizer);
 
         [$red, $green, $blue] = $this->rgbFromHex((string) config('pdf.watermark.stamp.colour'));
         $blendMode = (string) config('pdf.watermark.stamp.blend_mode');
@@ -723,14 +721,17 @@ class PdfCompressor
         foreach ($placements as $placement) {
             $pdf->SetFont('Arial', 'B', $placement['fontSize']);
             $pdf->SetTextColor($red, $green, $blue);
-            $pdf->rotatedText(
-                $placement['text'],
-                $placement['x'],
-                $offsetY + $placement['y'],
-                $placement['angleDegrees'],
-                $opacity,
-                $blendMode,
-            );
+
+            foreach ($stamp->glyphs($placement, $measure) as $glyph) {
+                $pdf->rotatedText(
+                    $glyph['text'],
+                    $glyph['x'],
+                    $offsetY + $glyph['y'],
+                    $glyph['angleDegrees'],
+                    $opacity,
+                    $blendMode,
+                );
+            }
         }
     }
 

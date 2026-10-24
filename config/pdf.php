@@ -148,6 +148,18 @@ return [
             'min_font_size' => 8.0,
             'max_font_size' => 120.0,
             'coverage' => 0.9,
+
+            /*
+            | Each stamp's text follows a sine wave with a random swing (a share
+            | of the label's width to either side), length and starting phase.
+            | Set `max_amplitude_ratio` to 0 for straight stamps.
+            */
+            'curve' => [
+                'min_amplitude_ratio' => 0.04,
+                'max_amplitude_ratio' => (float) env('PDF_WATERMARK_CURVE', 0.12),
+                'min_cycles' => 0.5,
+                'max_cycles' => 1.25,
+            ],
         ],
     ],
 
