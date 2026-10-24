@@ -190,7 +190,7 @@ paths:
   /api/pdfs/watermark-compress:
     post:
       summary: Watermark and compress a PDF
-      description: Adds a top-header text watermark to every page, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: their text is converted to outlines, scanned pages are flattened into a single image with the stamps painted in (the header stays sharp vector), a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
+      description: Adds a top-header text watermark to every page, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: the stamps' text is converted to outlines, scanned pages are flattened into a single image with the stamps painted in (the header stays sharp, selectable text), a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -256,7 +256,7 @@ paths:
   /api/pdfs/credit-watermark-compress:
     post:
       summary: Add a credit header and scattered watermark stamps, then compress a PDF
-      description: Adds `credit_text` as a header above every page and stamps `watermark_text` on every page at a random position and angle with very low opacity, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: their text is converted to outlines, scanned pages are flattened into a single image with the stamps painted in (the header stays sharp vector), a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
+      description: Adds `credit_text` as a header above every page and stamps `watermark_text` on every page at a random position and angle with very low opacity, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: the stamps' text is converted to outlines, scanned pages are flattened into a single image with the stamps painted in (the header stays sharp, selectable text), a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
       security:
         - ApiKeyAuth: []
       requestBody:

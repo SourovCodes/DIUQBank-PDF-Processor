@@ -127,7 +127,7 @@ test('the rasterizer keys rendered pages by their page number', function (): voi
         ->and(getimagesize($images[3])['mime'])->toBe('image/jpeg');
 })->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
 
-test('watermark text is outlined so text tools cannot find it', function (): void {
+test('stamps are outlined while the header credit stays selectable text', function (): void {
     $input = makeHardeningPdf($this->workspace.'/text.pdf', [str_repeat('Explain the process state diagram. ', 3)]);
     $output = $this->workspace.'/out.pdf';
 
@@ -136,13 +136,13 @@ test('watermark text is outlined so text tools cannot find it', function (): voi
     $text = extractedText($output);
 
     expect($text)->toContain('Explain the process state diagram')
-        ->not->toContain('Uploaded by Sourov')
+        ->toContain('Uploaded by Sourov')
         ->not->toContain('DIUQBank.com');
 })->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
 
-test('marks on a scanned page survive text filtering', function (): void {
+test('stamps on a scanned page survive text filtering', function (): void {
     config()->set('pdf.hardening.bake_scanned_pages', true);
-    config()->set('pdf.hardening.outline_marks', true);
+    config()->set('pdf.watermark.stamp.opacity', 0.8);
 
     $input = makeHardeningPdf($this->workspace.'/scan.pdf', [null]);
     $output = $this->workspace.'/out.pdf';
@@ -151,12 +151,14 @@ test('marks on a scanned page survive text filtering', function (): void {
 
     $stripped = stripText($output, $this->workspace.'/stripped.pdf');
 
-    // The outlined header (top 3% of the page) still holds dark credit text.
-    expect(darkestGreyIn($stripped, 0.0, 0.03))->toBeLessThan(128)
-        ->and(extractedText($output))->not->toContain('Uploaded by Sourov');
+    // The stamps are darker than the grey scan they were baked into, while the
+    // header, being real text so readers can select it, is filtered away.
+    expect(darkestGreyIn($stripped, 0.05, 1.0))->toBeLessThan(150)
+        ->and(darkestGreyIn($stripped, 0.0, 0.03))->toBeGreaterThan(200)
+        ->and(extractedText($output))->toContain('Uploaded by Sourov');
 })->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
 
-test('the header stays vector while the stamps are baked into a scanned page', function (): void {
+test('the header is not baked into a scanned page, the stamps are', function (): void {
     config()->set('pdf.hardening.bake_scanned_pages', true);
     config()->set('pdf.watermark.stamp.opacity', 0.8);
 

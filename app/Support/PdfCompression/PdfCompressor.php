@@ -88,11 +88,12 @@ class PdfCompressor
      * Watermark a document in a way that resists stripping.
      *
      * The page content, the stamps and the header are built as separate
-     * documents so the marks' text can be outlined on its own, without touching
+     * documents so the stamps' text can be outlined on its own, without touching
      * the document's real text. The stamps are laid over the content and
      * scanned pages are flattened into images with the stamps in their pixels.
-     * The header goes on top afterwards so it stays crisp vector shapes, then
-     * trace text is added and the result is compressed and locked.
+     * The header goes on top afterwards as real text, so the credit stays crisp
+     * and selectable, then trace text is added and the result is compressed and
+     * locked.
      */
     private function compressWithOverlay(string $inputPath, string $outputPath, string $headerText, ?string $stampText, PageLayout $layout, ?string $traceId): void
     {
@@ -122,8 +123,7 @@ class PdfCompressor
             $bakedImages = $this->bakeScannedPages($inputPath, $workspace.'/composed.pdf', $workspace);
 
             $this->drawMarksWithFpdf($workspace.'/header.pdf', $pages, $headerText, null);
-            $headerPath = $this->outlineText($workspace.'/header.pdf', $workspace.'/header-outlined.pdf');
-            $this->assembleWithFpdi($workspace.'/composed.pdf', $bakedImages, $headerPath, $workspace.'/assembled.pdf', $traceId);
+            $this->assembleWithFpdi($workspace.'/composed.pdf', $bakedImages, $workspace.'/header.pdf', $workspace.'/assembled.pdf', $traceId);
 
             $this->runGhostscript(
                 $workspace.'/assembled.pdf',
@@ -527,7 +527,7 @@ class PdfCompressor
     }
 
     /**
-     * Turn the marks' text into vector outlines. Returns the path to use: the
+     * Turn the stamps' text into vector outlines. Returns the path to use: the
      * outlined copy, or the original marks when outlining is off or fails.
      */
     private function outlineText(string $marksPath, string $outlinedPath): string
