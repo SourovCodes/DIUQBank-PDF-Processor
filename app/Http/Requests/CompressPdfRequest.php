@@ -23,6 +23,8 @@ class CompressPdfRequest extends FormRequest
     {
         return [
             'pdf' => ['required', 'file', 'mimetypes:application/pdf,application/x-pdf', 'max:30720'],
+            'trim_whitespace' => ['sometimes', 'boolean'],
+            'remove_scanner_credit' => ['sometimes', 'boolean'],
         ];
     }
 

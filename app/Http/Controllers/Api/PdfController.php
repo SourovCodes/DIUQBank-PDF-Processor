@@ -6,10 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\CompressPdfRequest;
 use App\Http\Requests\CreditWatermarkCompressPdfRequest;
 use App\Http\Requests\ExtractPdfPagesRequest;
+use App\Http\Requests\InspectPdfRequest;
 use App\Http\Requests\WatermarkCompressPdfRequest;
+use App\Support\PdfCompression\PageLayout;
 use App\Support\PdfCompression\PdfCompressor;
+use App\Support\PdfCompression\PdfTraceReader;
 use Closure;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -22,12 +26,13 @@ class PdfController extends Controller
     {
         /** @var UploadedFile $uploadedPdf */
         $uploadedPdf = $request->file('pdf');
+        $layout = $this->pageLayout($request);
 
         return $this->processPdf(
             uploadedPdf: $uploadedPdf,
             outputFilename: $this->outputFilename($uploadedPdf, 'compressed'),
-            processor: static function (string $inputPath, string $outputPath) use ($compressor): void {
-                $compressor->compress($inputPath, $outputPath);
+            processor: static function (string $inputPath, string $outputPath) use ($compressor, $layout): void {
+                $compressor->compress($inputPath, $outputPath, $layout);
             },
         );
     }
@@ -37,13 +42,16 @@ class PdfController extends Controller
         /** @var UploadedFile $uploadedPdf */
         $uploadedPdf = $request->file('pdf');
         $watermarkText = trim((string) $request->validated()['watermark_text']);
+        $layout = $this->pageLayout($request);
+        $traceId = $this->traceId($request);
 
         return $this->processPdf(
             uploadedPdf: $uploadedPdf,
             outputFilename: $this->outputFilename($uploadedPdf, 'watermarked-compressed'),
-            processor: static function (string $inputPath, string $outputPath) use ($compressor, $watermarkText): void {
-                $compressor->compressWithWatermark($inputPath, $outputPath, $watermarkText);
+            processor: static function (string $inputPath, string $outputPath) use ($compressor, $watermarkText, $layout, $traceId): void {
+                $compressor->compressWithWatermark($inputPath, $outputPath, $watermarkText, $layout, $traceId);
             },
+            headers: ['X-PDF-Trace-Id' => $traceId],
         );
     }
 
@@ -53,13 +61,16 @@ class PdfController extends Controller
         $uploadedPdf = $request->file('pdf');
         $creditText = trim((string) $request->validated()['credit_text']);
         $watermarkText = trim((string) $request->validated()['watermark_text']);
+        $layout = $this->pageLayout($request);
+        $traceId = $this->traceId($request);
 
         return $this->processPdf(
             uploadedPdf: $uploadedPdf,
             outputFilename: $this->outputFilename($uploadedPdf, 'watermarked-compressed'),
-            processor: static function (string $inputPath, string $outputPath) use ($compressor, $creditText, $watermarkText): void {
-                $compressor->compressWithCreditAndWatermark($inputPath, $outputPath, $creditText, $watermarkText);
+            processor: static function (string $inputPath, string $outputPath) use ($compressor, $creditText, $watermarkText, $layout, $traceId): void {
+                $compressor->compressWithCreditAndWatermark($inputPath, $outputPath, $creditText, $watermarkText, $layout, $traceId);
             },
+            headers: ['X-PDF-Trace-Id' => $traceId],
         );
     }
 
@@ -81,7 +92,57 @@ class PdfController extends Controller
         );
     }
 
-    private function processPdf(UploadedFile $uploadedPdf, string $outputFilename, Closure $processor): Response
+    private function pageLayout(Request $request): PageLayout
+    {
+        return PageLayout::fromConfig(
+            trimWhitespace: $request->boolean('trim_whitespace', (bool) config('pdf.trim.enabled')),
+            removeScannerCredits: $request->boolean('remove_scanner_credit', (bool) config('pdf.scanner_credit.remove')),
+        );
+    }
+
+    /**
+     * Report the trace IDs hidden in a PDF this service watermarked, so a copy
+     * found elsewhere can be matched to its upload.
+     */
+    public function inspect(InspectPdfRequest $request, PdfTraceReader $traceReader): JsonResponse
+    {
+        /** @var UploadedFile $uploadedPdf */
+        $uploadedPdf = $request->file('pdf');
+        $inputPath = $uploadedPdf->getRealPath();
+
+        if (! is_string($inputPath) || $inputPath === '' || ! file_exists($inputPath)) {
+            return new JsonResponse([
+                'message' => 'The uploaded PDF could not be processed.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        try {
+            $traceIds = $traceReader->traceIdsFor($inputPath);
+        } catch (RuntimeException $exception) {
+            return $this->processingErrorResponse($exception);
+        }
+
+        return new JsonResponse([
+            'traced' => $traceIds !== [],
+            'trace_ids' => $traceIds,
+        ]);
+    }
+
+    /**
+     * The caller's own upload reference when given, otherwise a fresh ID the
+     * caller can store from the response header.
+     */
+    private function traceId(Request $request): string
+    {
+        $traceId = trim((string) $request->input('trace_id', ''));
+
+        return $traceId !== '' ? $traceId : (string) Str::ulid();
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     */
+    private function processPdf(UploadedFile $uploadedPdf, string $outputFilename, Closure $processor, array $headers = []): Response
     {
         $inputPath = $uploadedPdf->getRealPath();
 
@@ -103,6 +164,7 @@ class PdfController extends Controller
             }
 
             return response($outputContents, Response::HTTP_OK, [
+                ...$headers,
                 'Content-Type' => 'application/pdf',
                 'Content-Disposition' => sprintf('attachment; filename="%s"', $outputFilename),
                 'Content-Length' => (string) strlen($outputContents),

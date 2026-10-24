@@ -8,4 +8,5 @@ Route::middleware('api.key')->group(function (): void {
     Route::post('/pdfs/watermark-compress', [PdfController::class, 'watermarkAndCompress'])->name('api.pdfs.watermark-compress');
     Route::post('/pdfs/credit-watermark-compress', [PdfController::class, 'creditWatermarkAndCompress'])->name('api.pdfs.credit-watermark-compress');
     Route::post('/pdfs/extract-pages', [PdfController::class, 'extractPages'])->name('api.pdfs.extract-pages');
+    Route::post('/pdfs/inspect', [PdfController::class, 'inspect'])->name('api.pdfs.inspect');
 });

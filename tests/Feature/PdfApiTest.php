@@ -1,5 +1,6 @@
 <?php
 
+use App\Support\PdfCompression\PageLayout;
 use App\Support\PdfCompression\PdfCompressor;
 use Illuminate\Http\UploadedFile;
 use Mockery\MockInterface;
@@ -303,4 +304,83 @@ test('docs page is public', function (): void {
     $response
         ->assertOk()
         ->assertSee('/openapi.yaml', escape: false);
+});
+
+test('compress endpoint trims whitespace by default', function (): void {
+    config()->set('pdf.trim.enabled', true);
+
+    $this->mock(PdfCompressor::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('compress')
+            ->once()
+            ->andReturnUsing(function (string $inputPath, string $outputPath, PageLayout $layout): void {
+                expect($layout->trimWhitespace)->toBeTrue()
+                    ->and($layout->pageWidthMm)->toBe(210.0);
+
+                file_put_contents($outputPath, '%PDF-1.4 compressed');
+            });
+    });
+
+    $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+        ])
+        ->assertOk();
+});
+
+test('whitespace trimming can be turned off per request', function (): void {
+    config()->set('pdf.trim.enabled', true);
+
+    $this->mock(PdfCompressor::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('compressWithCreditAndWatermark')
+            ->once()
+            ->andReturnUsing(function (string $inputPath, string $outputPath, string $creditText, string $watermarkText, PageLayout $layout): void {
+                expect($layout->trimWhitespace)->toBeFalse();
+
+                file_put_contents($outputPath, '%PDF-1.4 watermarked');
+            });
+    });
+
+    $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/credit-watermark-compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+            'credit_text' => 'Uploaded by Sourov',
+            'watermark_text' => 'DIUQBank.com',
+            'trim_whitespace' => '0',
+        ])
+        ->assertOk();
+});
+
+test('whitespace trimming follows the configured default when omitted', function (): void {
+    config()->set('pdf.trim.enabled', false);
+
+    $this->mock(PdfCompressor::class, function (MockInterface $mock): void {
+        $mock->shouldReceive('compressWithWatermark')
+            ->once()
+            ->andReturnUsing(function (string $inputPath, string $outputPath, string $watermarkText, PageLayout $layout): void {
+                expect($layout->trimWhitespace)->toBeFalse();
+
+                file_put_contents($outputPath, '%PDF-1.4 watermarked');
+            });
+    });
+
+    $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/watermark-compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+            'watermark_text' => 'DIUQBank.com',
+        ])
+        ->assertOk();
+});
+
+test('trim whitespace must be a boolean', function (): void {
+    $this
+        ->withHeader('X-API-Key', 'test-api-key')
+        ->post('/api/pdfs/compress', [
+            'pdf' => UploadedFile::fake()->create('source.pdf', 32, 'application/pdf'),
+            'trim_whitespace' => 'sometimes',
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['trim_whitespace']);
 });

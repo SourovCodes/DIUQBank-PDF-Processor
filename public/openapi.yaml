@@ -23,7 +23,7 @@ paths:
   /api/pdfs/compress:
     post:
       summary: Compress a PDF
-      description: Compresses the uploaded PDF with Ghostscript using the ebook preset.
+      description: Compresses the uploaded PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -38,6 +38,14 @@ paths:
                 pdf:
                   type: string
                   format: binary
+                trim_whitespace:
+                  type: boolean
+                  default: true
+                  description: Crop the white margins around each page's content before processing. Send `0` to keep the margins.
+                remove_scanner_credit:
+                  type: boolean
+                  default: true
+                  description: Hide the credit that scanner apps such as CamScanner stamp in a corner of every page. Send `0` to keep it.
       responses:
         '200':
           description: Compressed PDF
@@ -128,10 +136,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/pdfs/inspect:
+    post:
+      summary: Read the trace ID from a watermarked PDF
+      description: |
+        Returns the trace IDs that the watermark endpoints hid in a PDF, so a copy found
+        elsewhere can be matched to the upload it came from. Works on locked PDFs too.
+        A PDF that was not watermarked by this service (or had its hidden text stripped)
+        returns `traced: false`.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - pdf
+              properties:
+                pdf:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Trace IDs found in the PDF
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - traced
+                  - trace_ids
+                properties:
+                  traced:
+                    type: boolean
+                  trace_ids:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          description: Invalid or missing API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation or processing error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/pdfs/watermark-compress:
     post:
       summary: Watermark and compress a PDF
-      description: Adds a top-header text watermark to every page, then compresses the PDF with Ghostscript using the ebook preset.
+      description: Adds a top-header text watermark to every page, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: their text is converted to outlines, scanned pages are flattened into a single image with the marks painted in, the credit is repeated along the page edges, a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -150,9 +209,27 @@ paths:
                 watermark_text:
                   type: string
                   maxLength: 255
+                trim_whitespace:
+                  type: boolean
+                  default: true
+                  description: Crop the white margins around each page's content before processing. Send `0` to keep the margins.
+                remove_scanner_credit:
+                  type: boolean
+                  default: true
+                  description: Hide the credit that scanner apps such as CamScanner stamp in a corner of every page. Send `0` to keep it.
+                trace_id:
+                  type: string
+                  maxLength: 100
+                  pattern: '^[A-Za-z0-9._:-]+$'
+                  description: Your own reference for this upload, hidden in the PDF so a reposted copy can be traced back. A fresh ID is generated when omitted. Either way it is returned in the `X-PDF-Trace-Id` response header.
       responses:
         '200':
           description: Watermarked and compressed PDF
+          headers:
+            X-PDF-Trace-Id:
+              description: The trace ID hidden in the PDF.
+              schema:
+                type: string
           content:
             application/pdf:
               schema:
@@ -179,7 +256,7 @@ paths:
   /api/pdfs/credit-watermark-compress:
     post:
       summary: Add a credit header and scattered watermark stamps, then compress a PDF
-      description: Adds `credit_text` as a header above every page and stamps `watermark_text` on every page at a random position and angle with very low opacity, then compresses the PDF with Ghostscript using the ebook preset.
+      description: Adds `credit_text` as a header above every page and stamps `watermark_text` on every page at a random position and angle with very low opacity, then compresses the PDF with Ghostscript using the ebook preset. Every page is scaled to the same width (210mm by default) with its height following, so each page keeps its aspect ratio. Watermarks are hardened against removal: their text is converted to outlines, scanned pages are flattened into a single image with the marks painted in, the credit is repeated along the page edges, a trace ID is hidden in the file, and the PDF is locked against editing (viewing and printing stay open).
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -204,9 +281,27 @@ paths:
                   type: string
                   maxLength: 100
                   description: Stamped faintly at random positions and angles on every page.
+                trim_whitespace:
+                  type: boolean
+                  default: true
+                  description: Crop the white margins around each page's content before processing. Send `0` to keep the margins.
+                remove_scanner_credit:
+                  type: boolean
+                  default: true
+                  description: Hide the credit that scanner apps such as CamScanner stamp in a corner of every page. Send `0` to keep it.
+                trace_id:
+                  type: string
+                  maxLength: 100
+                  pattern: '^[A-Za-z0-9._:-]+$'
+                  description: Your own reference for this upload, hidden in the PDF so a reposted copy can be traced back. A fresh ID is generated when omitted. Either way it is returned in the `X-PDF-Trace-Id` response header.
       responses:
         '200':
           description: Watermarked and compressed PDF
+          headers:
+            X-PDF-Trace-Id:
+              description: The trace ID hidden in the PDF.
+              schema:
+                type: string
           content:
             application/pdf:
               schema:

@@ -40,6 +40,66 @@ return [
         'fallback_image_resolution' => (int) env('PDF_FALLBACK_IMAGE_RESOLUTION', 200),
     ],
 
+    'layout' => [
+        /*
+        |----------------------------------------------------------------------
+        | Uniform page width
+        |----------------------------------------------------------------------
+        |
+        | Every page is scaled to this width in millimetres, after any trimming,
+        | with its height scaled to match so the aspect ratio is kept. A uniform
+        | width makes documents read smoothly when scrolling on a phone. Set to 0
+        | to keep each page's own width.
+        |
+        */
+
+        'page_width_mm' => (float) env('PDF_PAGE_WIDTH_MM', 210),
+    ],
+
+    'scanner_credit' => [
+        /*
+        |----------------------------------------------------------------------
+        | Scanner app credits
+        |----------------------------------------------------------------------
+        |
+        | CamScanner stamps its logo and name in a corner of every page and lays
+        | a link to its site over them. Any link to these domains marks a credit
+        | to hide; whitespace trimming then ignores that corner too.
+        |
+        | `remove` is the default for API requests, which may override it with
+        | the `remove_scanner_credit` field.
+        |
+        */
+
+        'remove' => (bool) env('PDF_REMOVE_SCANNER_CREDIT', true),
+        'link_domains' => ['camscanner.com', 'camscanner.net', 'intsig.com'],
+    ],
+
+    'trim' => [
+        /*
+        |----------------------------------------------------------------------
+        | Whitespace trimming
+        |----------------------------------------------------------------------
+        |
+        | Phone photos of question papers are often dropped onto a Letter or A4
+        | page, leaving wide white margins around the actual content. Each page
+        | is rendered at a low resolution and cropped to the darker-than-white
+        | pixels plus some padding. Rendering (rather than reading the drawing
+        | bounding box) also catches white borders baked into scanned images.
+        |
+        | `enabled` is the default for API requests, which may override it with
+        | the `trim_whitespace` field.
+        |
+        */
+
+        'enabled' => (bool) env('PDF_TRIM_WHITESPACE', true),
+        'render_resolution' => 36,
+        'white_threshold' => 235,
+        'min_content_pixels' => 2,
+        'padding_points' => 12.0,
+        'min_trim_ratio' => 0.03,
+    ],
+
     'watermark' => [
         /*
         |----------------------------------------------------------------------
@@ -67,24 +127,80 @@ return [
         |
         | Stamps are drawn over the page content at a very low opacity, so they
         | barely register while reading yet prove where a copied paper came
-        | from. Drawing beneath the content would hide them behind full-page
+        | from. They blend with Multiply: on white paper they show as a faint
+        | tint of `colour`, while black text crossing them stays fully black, so
+        | they never wash out what students need to read. Drawing beneath the content would hide them behind full-page
         | scans. Each page is split into `stamps_per_page` horizontal bands and
         | every band gets one stamp at a random position and tilt, so there is
-        | no fixed spot to cover up (one band, the whole page, by default). The font size scales with the shorter side
+        | no fixed spot to cover up; three bands make covering them all tedious. The font size scales with the shorter side
         | of the page: 36pt on A4.
         |
         */
 
         'stamp' => [
-            'stamps_per_page' => (int) env('PDF_WATERMARK_STAMPS_PER_PAGE', 1),
+            'stamps_per_page' => (int) env('PDF_WATERMARK_STAMPS_PER_PAGE', 3),
             'min_angle_degrees' => 15.0,
             'max_angle_degrees' => 65.0,
             'opacity' => (float) env('PDF_WATERMARK_OPACITY', 0.05),
-            'grey_level' => 120,
+            'colour' => env('PDF_WATERMARK_COLOUR', '#2F5D9B'),
+            'blend_mode' => 'Multiply',
             'font_size_per_mm' => 36 / 210,
             'min_font_size' => 8.0,
             'max_font_size' => 120.0,
             'coverage' => 0.9,
         ],
+
+        /*
+        |----------------------------------------------------------------------
+        | Edge credit
+        |----------------------------------------------------------------------
+        |
+        | The header credit is also printed small along the right and bottom
+        | edges of the page content, so cropping the header off still leaves a
+        | credit unless the paper itself is cut into. 6pt on A4.
+        |
+        */
+
+        'edge' => [
+            'enabled' => (bool) env('PDF_WATERMARK_EDGE_CREDIT', true),
+            'opacity' => 0.45,
+            'colour' => env('PDF_WATERMARK_EDGE_COLOUR', '#2F5D9B'),
+            'blend_mode' => 'Multiply',
+            'font_size_per_mm' => 6 / 210,
+            'min_font_size' => 4.0,
+            'inset_mm' => 1.5,
+        ],
+    ],
+
+    'hardening' => [
+        /*
+        |----------------------------------------------------------------------
+        | Watermark hardening
+        |----------------------------------------------------------------------
+        |
+        | Watermarks drawn as text are easy to strip: PDF editors delete them as
+        | objects and `gs -dFILTERTEXT` removes every one of them from a scan
+        | while leaving the scan untouched. These measures make that harder:
+        |
+        | - `outline_marks` turns the marks' text into vector shapes, so text
+        |   filters and "delete all text" tools cannot find them.
+        | - `bake_scanned_pages` flattens pages holding (almost) no text into a
+        |   single image with the marks painted into its pixels. Pages with up
+        |   to `scanned_page_max_characters` characters of text count as scans,
+        |   which tolerates stray labels such as a scanner app's credit.
+        | - `lock_editing` encrypts the result with a random owner password that
+        |   allows viewing and printing but not editing or extracting pages.
+        | - Every page carries invisible trace text and the document info holds
+        |   the trace ID, so a reposted copy can be traced back to its upload.
+        |
+        */
+
+        'outline_marks' => (bool) env('PDF_OUTLINE_MARKS', true),
+        'bake_scanned_pages' => (bool) env('PDF_BAKE_SCANNED_PAGES', true),
+        'scanned_page_max_characters' => 20,
+        // 150 DPI across an A4 page: crisp for printed text at a third of the bytes.
+        'baked_pixel_width' => (int) env('PDF_BAKED_PIXEL_WIDTH', 1240),
+        'baked_jpeg_quality' => (int) env('PDF_BAKED_JPEG_QUALITY', 60),
+        'lock_editing' => (bool) env('PDF_LOCK_EDITING', true),
     ],
 ];

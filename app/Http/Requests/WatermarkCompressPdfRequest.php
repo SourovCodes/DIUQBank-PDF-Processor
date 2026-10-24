@@ -23,6 +23,9 @@ class WatermarkCompressPdfRequest extends FormRequest
     {
         return [
             'pdf' => ['required', 'file', 'mimetypes:application/pdf,application/x-pdf', 'max:30720'],
+            'trim_whitespace' => ['sometimes', 'boolean'],
+            'remove_scanner_credit' => ['sometimes', 'boolean'],
+            'trace_id' => ['nullable', 'string', 'max:100', 'regex:/\A[A-Za-z0-9._:-]+\z/'],
             'watermark_text' => ['required', 'string', 'max:255'],
         ];
     }

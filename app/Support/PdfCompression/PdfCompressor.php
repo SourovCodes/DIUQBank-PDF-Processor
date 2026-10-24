@@ -16,15 +16,40 @@ class PdfCompressor
     public function __construct(
         private readonly PdfPageGeometry $geometry = new PdfPageGeometry,
         private readonly PdfImageAudit $imageAudit = new PdfImageAudit,
+        private readonly PdfWhitespaceDetector $whitespaceDetector = new PdfWhitespaceDetector,
+        private readonly ScannerCreditDetector $scannerCreditDetector = new ScannerCreditDetector,
+        private readonly PdfTextAudit $textAudit = new PdfTextAudit,
+        private readonly PdfPageRasterizer $rasterizer = new PdfPageRasterizer,
         private readonly Randomizer $randomizer = new Randomizer,
     ) {}
 
-    public function compress(string $inputPath, string $outputPath): void
+    public function compress(string $inputPath, string $outputPath, PageLayout $layout = new PageLayout): void
     {
         $this->ensureGhostscriptAvailable();
         $this->ensureFileExists($inputPath);
 
-        $this->runGhostscript($inputPath, $outputPath, $this->compressionArguments($inputPath));
+        $credits = $layout->removeScannerCredits ? $this->scannerCreditDetector->creditRegionsFor($inputPath) : [];
+        $crops = $layout->trimWhitespace ? $this->whitespaceDetector->cropsFor($inputPath, $credits) : [];
+
+        if ($crops === [] && $credits === [] && $this->alreadyFitsLayout($inputPath, $layout)) {
+            $this->runGhostscript($inputPath, $outputPath, $this->compressionArguments($inputPath));
+
+            return;
+        }
+
+        $laidOutPath = $this->temporaryPdfPath('pdf-layout-');
+
+        try {
+            $this->withRepairFallback(
+                $inputPath,
+                fn (string $sourcePath) => $this->layOutWithFpdi($sourcePath, $laidOutPath, $layout, $crops, $credits),
+                'page layout',
+            );
+
+            $this->runGhostscript($laidOutPath, $outputPath, $this->compressionArguments($inputPath, $laidOutPath));
+        } finally {
+            @unlink($laidOutPath);
+        }
     }
 
     /**
@@ -45,42 +70,67 @@ class PdfCompressor
         );
     }
 
-    public function compressWithWatermark(string $inputPath, string $outputPath, string $watermarkText): void
+    public function compressWithWatermark(string $inputPath, string $outputPath, string $watermarkText, PageLayout $layout = new PageLayout, ?string $traceId = null): void
     {
-        $this->compressWithOverlay($inputPath, $outputPath, $watermarkText, null);
+        $this->compressWithOverlay($inputPath, $outputPath, $watermarkText, null, $layout, $traceId);
     }
 
     /**
      * Add the credit header above every page, scatter faint watermark stamps
      * across the page content, then compress the result.
      */
-    public function compressWithCreditAndWatermark(string $inputPath, string $outputPath, string $creditText, string $watermarkText): void
+    public function compressWithCreditAndWatermark(string $inputPath, string $outputPath, string $creditText, string $watermarkText, PageLayout $layout = new PageLayout, ?string $traceId = null): void
     {
-        $this->compressWithOverlay($inputPath, $outputPath, $creditText, $watermarkText);
+        $this->compressWithOverlay($inputPath, $outputPath, $creditText, $watermarkText, $layout, $traceId);
     }
 
-    private function compressWithOverlay(string $inputPath, string $outputPath, string $headerText, ?string $stampText): void
+    /**
+     * Watermark a document in a way that resists stripping.
+     *
+     * The page content and the marks (header, edge credits, stamps) are built as
+     * separate documents so the marks' text can be outlined on its own, without
+     * touching the document's real text. They are then laid on top of each
+     * other, scanned pages are flattened into images with the marks in their
+     * pixels, trace text is added, and the result is compressed and locked.
+     */
+    private function compressWithOverlay(string $inputPath, string $outputPath, string $headerText, ?string $stampText, PageLayout $layout, ?string $traceId): void
     {
         $this->ensureGhostscriptAvailable();
         $this->ensureFileExists($inputPath);
+        $this->ensureValidTraceId($traceId);
 
-        $watermarkedPath = $this->temporaryPdfPath('pdf-watermark-');
+        $credits = $layout->removeScannerCredits ? $this->scannerCreditDetector->creditRegionsFor($inputPath) : [];
+        $crops = $layout->trimWhitespace ? $this->whitespaceDetector->cropsFor($inputPath, $credits) : [];
+        $workspace = $this->temporaryDirectory('pdf-overlay-');
 
         try {
+            $pages = [];
+
             $this->withRepairFallback(
                 $inputPath,
-                fn (string $sourcePath) => $this->addWatermarkWithFpdi($sourcePath, $watermarkedPath, $headerText, $stampText),
+                function (string $sourcePath) use ($workspace, $layout, $crops, $credits, &$pages): void {
+                    $pages = $this->layOutUnderHeaderWithFpdi($sourcePath, $workspace.'/content.pdf', $layout, $crops, $credits);
+                },
                 'watermarking',
             );
 
-            /*
-             * Resolution is derived from the original document: the repaired copy
-             * that FPDI may have consumed is already downsampling-free, but its
-             * page geometry is identical, so either input yields the same target.
-             */
-            $this->runGhostscript($watermarkedPath, $outputPath, $this->compressionArguments($inputPath));
+            $this->drawMarksWithFpdf($workspace.'/marks.pdf', $pages, $headerText, $stampText);
+            $marksPath = $this->outlineText($workspace.'/marks.pdf', $workspace.'/marks-outlined.pdf');
+            $this->overlayWithFpdi($workspace.'/content.pdf', $marksPath, $workspace.'/composed.pdf');
+
+            $bakedImages = $this->bakeScannedPages($inputPath, $workspace.'/composed.pdf', $workspace);
+            $this->assembleWithFpdi($workspace.'/composed.pdf', $bakedImages, $workspace.'/assembled.pdf', $traceId);
+
+            $this->runGhostscript(
+                $workspace.'/assembled.pdf',
+                $outputPath,
+                $this->compressionArguments($inputPath, $workspace.'/assembled.pdf'),
+                $this->lockingArguments(),
+                $this->documentInfoPostScript($traceId),
+            );
         } finally {
-            @unlink($watermarkedPath);
+            array_map('unlink', glob($workspace.'/*') ?: []);
+            @rmdir($workspace);
         }
     }
 
@@ -133,11 +183,13 @@ class PdfCompressor
 
     /**
      * @param  array<int, string>  $arguments  Ghostscript options, excluding binary and file paths
+     * @param  array<int, string>  $finishingArguments  options kept on the crash-safe retry too, such as encryption
+     * @param  string|null  $postScript  PostScript run before the input, such as document info pdfmarks
      */
-    private function runGhostscript(string $inputPath, string $outputPath, array $arguments): void
+    private function runGhostscript(string $inputPath, string $outputPath, array $arguments, array $finishingArguments = [], ?string $postScript = null): void
     {
         try {
-            $this->executeGhostscript($inputPath, $outputPath, $arguments);
+            $this->executeGhostscript($inputPath, $outputPath, [...$arguments, ...$finishingArguments], $postScript);
 
             return;
         } catch (GhostscriptCrashed $crash) {
@@ -153,7 +205,7 @@ class PdfCompressor
          * output size but keeps the request alive.
          */
         try {
-            $this->executeGhostscript($inputPath, $outputPath, $this->crashSafeArguments());
+            $this->executeGhostscript($inputPath, $outputPath, [...$this->crashSafeArguments(), ...$finishingArguments], $postScript);
         } catch (GhostscriptCrashed $crash) {
             throw new RuntimeException(
                 'Ghostscript could not process this PDF; it crashed with signal '.$crash->signal.'.',
@@ -168,7 +220,7 @@ class PdfCompressor
      *
      * @throws GhostscriptCrashed
      */
-    private function executeGhostscript(string $inputPath, string $outputPath, array $arguments): void
+    private function executeGhostscript(string $inputPath, string $outputPath, array $arguments, ?string $postScript = null): void
     {
         try {
             $result = Process::path(base_path())
@@ -177,6 +229,7 @@ class PdfCompressor
                     (string) config('pdf.ghostscript.binary'),
                     ...$arguments,
                     '-sOutputFile='.$outputPath,
+                    ...($postScript === null ? [] : ['-c', $postScript, '-f']),
                     $inputPath,
                 ]);
         } catch (ProcessSignaledException $exception) {
@@ -219,9 +272,9 @@ class PdfCompressor
     /**
      * @return array<int, string>
      */
-    private function compressionArguments(string $inputPath): array
+    private function compressionArguments(string $inputPath, ?string $geometryPath = null): array
     {
-        $resolution = $this->imageResolutionFor($inputPath);
+        $resolution = $this->imageResolutionFor($geometryPath ?? $inputPath);
         $monoResolution = $this->monoImageResolutionFor($resolution);
 
         /*
@@ -316,7 +369,7 @@ class PdfCompressor
      * Derive a DPI cap from the narrowest page so that undersized pages keep the
      * same pixel budget as a normal A4 page.
      */
-    private function imageResolutionFor(string $inputPath): int
+    private function imageResolutionFor(string $inputPath, ?int $targetPixelWidth = null): int
     {
         $widthInPoints = $this->geometry->narrowestPageWidthInPoints($inputPath);
 
@@ -325,7 +378,7 @@ class PdfCompressor
         }
 
         $widthInInches = $widthInPoints / 72;
-        $resolution = (int) ceil((int) config('pdf.compression.target_pixel_width') / $widthInInches);
+        $resolution = (int) ceil(($targetPixelWidth ?? (int) config('pdf.compression.target_pixel_width')) / $widthInInches);
 
         return $this->clampInt(
             $resolution,
@@ -375,31 +428,279 @@ class PdfCompressor
         $pdf->Output('F', $outputPath);
     }
 
-    private function addWatermarkWithFpdi(string $inputPath, string $outputPath, string $headerText, ?string $stampText): void
+    /**
+     * Whether every page already has the layout's width, so no FPDI pass is
+     * needed. Unreadable geometry is not trusted to fit.
+     */
+    private function alreadyFitsLayout(string $inputPath, PageLayout $layout): bool
+    {
+        if ($layout->pageWidthMm === null) {
+            return true;
+        }
+
+        $widths = $this->geometry->pageWidthsInPoints($inputPath);
+        $targetWidth = $layout->pageWidthMm / 25.4 * 72;
+
+        return $widths !== [] && collect($widths)->every(fn (float $width): bool => abs($width - $targetWidth) < 0.5);
+    }
+
+    /**
+     * @param  array<int, PageRegion>  $crops  keyed by 1-indexed page number
+     * @param  array<int, array<int, PageRegion>>  $hiddenRegions  keyed by 1-indexed page number
+     */
+    private function layOutWithFpdi(string $inputPath, string $outputPath, PageLayout $layout, array $crops, array $hiddenRegions = []): void
     {
         $pdf = $this->newDocument();
         $pageCount = $pdf->setSourceFile($inputPath);
 
         for ($page = 1; $page <= $pageCount; $page++) {
             $templateId = $pdf->importPage($page);
-            $size = $pdf->getTemplateSize($templateId);
+            [$pageWidth, $pageHeight, $scale] = $this->laidOutSize($pdf, $templateId, $layout, $crops[$page] ?? null);
 
-            $pageWidth = (float) $size['width'];
-            $pageHeight = (float) $size['height'];
+            $pdf->AddPage($pageWidth > $pageHeight ? 'L' : 'P', [$pageWidth, $pageHeight]);
+            $this->placePage($pdf, $templateId, 0, $scale, $crops[$page] ?? null, $hiddenRegions[$page] ?? []);
+        }
+
+        $pdf->Output('F', $outputPath);
+    }
+
+    /**
+     * Lay out the page content with blank room above it for the header.
+     *
+     * @param  array<int, PageRegion>  $crops  keyed by 1-indexed page number
+     * @param  array<int, array<int, PageRegion>>  $hiddenRegions  keyed by 1-indexed page number
+     * @return array<int, array{width: float, contentHeight: float, headerHeight: float}> keyed by 1-indexed page number
+     */
+    private function layOutUnderHeaderWithFpdi(string $inputPath, string $outputPath, PageLayout $layout, array $crops, array $hiddenRegions): array
+    {
+        $pdf = $this->newDocument();
+        $pageCount = $pdf->setSourceFile($inputPath);
+        $pages = [];
+
+        for ($page = 1; $page <= $pageCount; $page++) {
+            $templateId = $pdf->importPage($page);
+            [$pageWidth, $pageHeight, $scale] = $this->laidOutSize($pdf, $templateId, $layout, $crops[$page] ?? null);
 
             $header = new WatermarkHeader($pageWidth);
             $totalHeight = $pageHeight + $header->heightMm;
 
             $pdf->AddPage($pageWidth > $totalHeight ? 'L' : 'P', [$pageWidth, $totalHeight]);
-            $this->drawWatermarkHeader($pdf, $header, $headerText);
-            $pdf->useTemplate($templateId, 0, $header->heightMm, $pageWidth, $pageHeight);
+            $this->placePage($pdf, $templateId, $header->heightMm, $scale, $crops[$page] ?? null, $hiddenRegions[$page] ?? []);
+
+            $pages[$page] = ['width' => $pageWidth, 'contentHeight' => $pageHeight, 'headerHeight' => $header->heightMm];
+        }
+
+        $pdf->Output('F', $outputPath);
+
+        return $pages;
+    }
+
+    /**
+     * Draw only the marks, on pages matching the laid-out content.
+     *
+     * @param  array<int, array{width: float, contentHeight: float, headerHeight: float}>  $pages
+     */
+    private function drawMarksWithFpdf(string $outputPath, array $pages, string $headerText, ?string $stampText): void
+    {
+        $pdf = $this->newDocument();
+
+        foreach ($pages as $page) {
+            $totalHeight = $page['contentHeight'] + $page['headerHeight'];
+
+            $pdf->AddPage($page['width'] > $totalHeight ? 'L' : 'P', [$page['width'], $totalHeight]);
+            $this->drawWatermarkHeader($pdf, new WatermarkHeader($page['width']), $headerText);
+
+            if ((bool) config('pdf.watermark.edge.enabled')) {
+                $this->drawEdgeCredits($pdf, $page['width'], $page['contentHeight'], $page['headerHeight'], $headerText);
+            }
 
             if ($stampText !== null) {
-                $this->drawWatermarkStamps($pdf, new WatermarkStamp($pageWidth, $pageHeight), $header->heightMm, $stampText);
+                $this->drawWatermarkStamps($pdf, new WatermarkStamp($page['width'], $page['contentHeight']), $page['headerHeight'], $stampText);
             }
         }
 
         $pdf->Output('F', $outputPath);
+    }
+
+    /**
+     * Turn the marks' text into vector outlines. Returns the path to use: the
+     * outlined copy, or the original marks when outlining is off or fails.
+     */
+    private function outlineText(string $marksPath, string $outlinedPath): string
+    {
+        if (! (bool) config('pdf.hardening.outline_marks')) {
+            return $marksPath;
+        }
+
+        try {
+            $this->executeGhostscript($marksPath, $outlinedPath, [
+                ...$this->baseArguments(),
+                '-dCompatibilityLevel=1.4',
+                '-dNoOutputFonts',
+            ]);
+
+            return $outlinedPath;
+        } catch (Throwable $exception) {
+            Log::warning('Outlining watermark text failed; keeping it as text.', [
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $marksPath;
+        }
+    }
+
+    private function overlayWithFpdi(string $contentPath, string $marksPath, string $outputPath): void
+    {
+        $pdf = $this->newDocument();
+        $pageCount = $pdf->setSourceFile($contentPath);
+
+        for ($page = 1; $page <= $pageCount; $page++) {
+            $pdf->setSourceFile($contentPath);
+            $contentId = $pdf->importPage($page);
+            $pdf->setSourceFile($marksPath);
+            $marksId = $pdf->importPage($page);
+
+            $size = $pdf->getTemplateSize($contentId);
+            $width = (float) $size['width'];
+            $height = (float) $size['height'];
+
+            $pdf->AddPage($width > $height ? 'L' : 'P', [$width, $height]);
+            $pdf->useTemplate($contentId, 0, 0, $width, $height);
+            $pdf->useTemplate($marksId, 0, 0, $width, $height);
+        }
+
+        $pdf->Output('F', $outputPath);
+    }
+
+    /**
+     * Render the scanned pages of the composed document to JPEG, marks and all.
+     * Pages are judged on the original document, before any marks were added.
+     *
+     * @return array<int, string> JPEG paths keyed by 1-indexed page number
+     */
+    private function bakeScannedPages(string $originalPath, string $composedPath, string $workspace): array
+    {
+        if (! (bool) config('pdf.hardening.bake_scanned_pages')) {
+            return [];
+        }
+
+        return $this->rasterizer->renderToJpeg(
+            $composedPath,
+            $this->textAudit->scannedPages($originalPath),
+            $this->imageResolutionFor($composedPath, (int) config('pdf.hardening.baked_pixel_width')),
+            $workspace,
+        );
+    }
+
+    /**
+     * Swap baked pages in for their vector originals and add the trace text.
+     *
+     * @param  array<int, string>  $bakedImages  JPEG paths keyed by 1-indexed page number
+     */
+    private function assembleWithFpdi(string $composedPath, array $bakedImages, string $outputPath, ?string $traceId): void
+    {
+        $pdf = $this->newDocument();
+        $pageCount = $pdf->setSourceFile($composedPath);
+
+        for ($page = 1; $page <= $pageCount; $page++) {
+            $templateId = $pdf->importPage($page);
+            $size = $pdf->getTemplateSize($templateId);
+            $width = (float) $size['width'];
+            $height = (float) $size['height'];
+
+            $pdf->AddPage($width > $height ? 'L' : 'P', [$width, $height]);
+
+            if (isset($bakedImages[$page])) {
+                $pdf->Image($bakedImages[$page], 0, 0, $width, $height, 'JPG');
+            } else {
+                $pdf->useTemplate($templateId, 0, 0, $width, $height);
+            }
+
+            if ($traceId !== null) {
+                $pdf->SetFont('Arial', '', 4);
+                $pdf->invisibleText(2, $height - 2, PdfTraceReader::PREFIX.$traceId);
+            }
+        }
+
+        $pdf->Output('F', $outputPath);
+    }
+
+    /**
+     * Print the credit small along the right and bottom edges of the content.
+     */
+    private function drawEdgeCredits(StampablePdf $pdf, float $pageWidth, float $contentHeight, float $offsetY, string $text): void
+    {
+        $text = $this->toCoreFontEncoding($text);
+        $inset = (float) config('pdf.watermark.edge.inset_mm');
+        [$red, $green, $blue] = $this->rgbFromHex((string) config('pdf.watermark.edge.colour'));
+        $blendMode = (string) config('pdf.watermark.edge.blend_mode');
+        $opacity = (float) config('pdf.watermark.edge.opacity');
+
+        $edges = [
+            // Along the right edge, reading upwards.
+            ['length' => $contentHeight, 'angle' => 90.0, 'centre' => fn (float $glyphHeight): array => [$pageWidth - $inset - $glyphHeight / 2, $offsetY + $contentHeight / 2]],
+            // Along the bottom edge.
+            ['length' => $pageWidth, 'angle' => 0.0, 'centre' => fn (float $glyphHeight): array => [$pageWidth / 2, $offsetY + $contentHeight - $inset - $glyphHeight / 2]],
+        ];
+
+        foreach ($edges as $edge) {
+            $fontSize = max(
+                (float) config('pdf.watermark.edge.min_font_size'),
+                $pageWidth * (float) config('pdf.watermark.edge.font_size_per_mm'),
+            );
+
+            $pdf->SetFont('Arial', '', $fontSize);
+            $available = $edge['length'] * 0.9;
+
+            if ($pdf->GetStringWidth($text) > $available) {
+                $fontSize = max((float) config('pdf.watermark.edge.min_font_size'), $fontSize * $available / $pdf->GetStringWidth($text));
+                $pdf->SetFont('Arial', '', $fontSize);
+            }
+
+            [$centreX, $centreY] = ($edge['centre'])($fontSize * 25.4 / 72);
+
+            $pdf->SetTextColor($red, $green, $blue);
+            $pdf->rotatedText($text, $centreX, $centreY, $edge['angle'], $opacity, $blendMode);
+        }
+    }
+
+    /**
+     * Size of the imported page once its crop, if any, is applied and it is
+     * scaled to the layout's width, plus the scale factor that took.
+     *
+     * @return array{0: float, 1: float, 2: float}
+     */
+    private function laidOutSize(StampablePdf $pdf, string $templateId, PageLayout $layout, ?PageRegion $crop): array
+    {
+        $size = $pdf->getTemplateSize($templateId);
+        $width = (float) $size['width'];
+        $height = (float) $size['height'];
+
+        if ($crop !== null) {
+            [$width, $height] = [$crop->widthOf($width), $crop->heightOf($height)];
+        }
+
+        [$scaledWidth, $scaledHeight] = $layout->scaledSize($width, $height);
+
+        return [$scaledWidth, $scaledHeight, $width > 0.0 ? $scaledWidth / $width : 1.0];
+    }
+
+    /**
+     * @param  array<int, PageRegion>  $hiddenRegions
+     */
+    private function placePage(StampablePdf $pdf, string $templateId, float $y, float $scale, ?PageRegion $crop, array $hiddenRegions = []): void
+    {
+        $size = $pdf->getTemplateSize($templateId);
+        $width = (float) $size['width'] * $scale;
+        $height = (float) $size['height'] * $scale;
+
+        if ($crop === null && $hiddenRegions === []) {
+            $pdf->useTemplate($templateId, 0, $y, $width, $height);
+
+            return;
+        }
+
+        $pdf->useCroppedTemplate($templateId, 0, $y, $width, $height, $crop ?? PageRegion::wholePage(), $hiddenRegions);
     }
 
     private function drawWatermarkHeader(Fpdi $pdf, WatermarkHeader $header, string $text): void
@@ -440,20 +741,36 @@ class PdfCompressor
             $this->randomizer,
         );
 
-        $greyLevel = (int) config('pdf.watermark.stamp.grey_level');
+        [$red, $green, $blue] = $this->rgbFromHex((string) config('pdf.watermark.stamp.colour'));
+        $blendMode = (string) config('pdf.watermark.stamp.blend_mode');
         $opacity = (float) config('pdf.watermark.stamp.opacity');
 
         foreach ($placements as $placement) {
             $pdf->SetFont('Arial', 'B', $placement['fontSize']);
-            $pdf->SetTextColor($greyLevel, $greyLevel, $greyLevel);
+            $pdf->SetTextColor($red, $green, $blue);
             $pdf->rotatedText(
                 $placement['text'],
                 $placement['x'],
                 $offsetY + $placement['y'],
                 $placement['angleDegrees'],
                 $opacity,
+                $blendMode,
             );
         }
+    }
+
+    /**
+     * Parse a `#RRGGBB` colour, falling back to mid grey for anything else.
+     *
+     * @return array{0: int, 1: int, 2: int}
+     */
+    private function rgbFromHex(string $colour): array
+    {
+        if (preg_match('/\A#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})\z/i', trim($colour), $parts) !== 1) {
+            return [120, 120, 120];
+        }
+
+        return [(int) hexdec($parts[1]), (int) hexdec($parts[2]), (int) hexdec($parts[3])];
     }
 
     /**
@@ -478,6 +795,66 @@ class PdfCompressor
         $pdf->SetAutoPageBreak(false);
 
         return $pdf;
+    }
+
+    /**
+     * Encrypt with a random, discarded owner password: viewing and printing
+     * stay open, while editing, copying and extracting pages are refused.
+     *
+     * @return array<int, string>
+     */
+    private function lockingArguments(): array
+    {
+        if (! (bool) config('pdf.hardening.lock_editing')) {
+            return [];
+        }
+
+        /*
+         * Permission bits are inverted: everything above bit 12 and the reserved
+         * bits 7 and 8 must be set (-3904), then print (4) and high quality
+         * print (2048) are granted on top.
+         */
+        return [
+            '-dEncryptionR=3',
+            '-dKeyLength=128',
+            '-sOwnerPassword='.bin2hex(random_bytes(16)),
+            '-dPermissions='.(-3904 + 4 + 2048),
+        ];
+    }
+
+    /**
+     * A pdfmark writing the trace ID into the document info. The values are
+     * hex strings, so nothing in the ID can break out of the PostScript.
+     */
+    private function documentInfoPostScript(?string $traceId): ?string
+    {
+        if ($traceId === null) {
+            return null;
+        }
+
+        return sprintf(
+            '[ /DIUQBankTraceId <%s> /Keywords <%s> /DOCINFO pdfmark',
+            bin2hex($traceId),
+            bin2hex(PdfTraceReader::PREFIX.$traceId),
+        );
+    }
+
+    private function ensureValidTraceId(?string $traceId): void
+    {
+        if ($traceId !== null && preg_match('/\A[A-Za-z0-9._:-]{1,100}\z/', $traceId) !== 1) {
+            throw new RuntimeException('The trace ID may only contain letters, numbers, dots, dashes, colons and underscores.');
+        }
+    }
+
+    private function temporaryDirectory(string $prefix): string
+    {
+        $directory = sys_get_temp_dir().'/'.$prefix.bin2hex(random_bytes(8));
+
+        if (! mkdir($directory, 0700)) {
+            throw new RuntimeException('Unable to create a temporary directory.');
+        }
+
+        return $directory;
     }
 
     private function ensureGhostscriptAvailable(): void

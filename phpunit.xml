@@ -32,5 +32,7 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="PDF_BAKE_SCANNED_PAGES" value="false"/>
+        <env name="PDF_LOCK_EDITING" value="false"/>
     </php>
 </phpunit>

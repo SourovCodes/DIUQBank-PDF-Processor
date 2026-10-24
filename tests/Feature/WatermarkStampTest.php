@@ -30,10 +30,10 @@ test('stamp font size is clamped to the configured range', function (): void {
         ->and((new WatermarkStamp(5000.0, 5000.0))->nominalFontSize)->toBe(120.0);
 });
 
-test('a single stamp is placed on the page by default', function (): void {
+test('three stamps are placed on the page by default', function (): void {
     $placements = (new WatermarkStamp(210.0, 297.0))->placements('DIUQBank.com', measureStampLabel(), seededRandomizer());
 
-    expect($placements)->toHaveCount(1);
+    expect($placements)->toHaveCount(3);
 });
 
 test('one stamp is placed in each band of the page', function (): void {
