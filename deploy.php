@@ -33,7 +33,12 @@ set('writable_dirs', [
     'bootstrap/cache',
 ]);
 
+// Only touch the top-level dirs: files inside storage are created by www-data,
+// so the deploy user cannot chmod them, and the server's default ACLs already
+// keep everything below writable.
 set('writable_mode', 'chmod');
+set('writable_recursive', false);
+set('writable_chmod_mode', '2775');
 
 // Every class is in the classmap after install, so skip filesystem lookups.
 set('composer_options', '--verbose --prefer-dist --no-progress --no-interaction --no-dev --optimize-autoloader --classmap-authoritative');
