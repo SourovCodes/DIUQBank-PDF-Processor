@@ -149,27 +149,6 @@ return [
             'max_font_size' => 120.0,
             'coverage' => 0.9,
         ],
-
-        /*
-        |----------------------------------------------------------------------
-        | Edge credit
-        |----------------------------------------------------------------------
-        |
-        | The header credit is also printed small along the right and bottom
-        | edges of the page content, so cropping the header off still leaves a
-        | credit unless the paper itself is cut into. 6pt on A4.
-        |
-        */
-
-        'edge' => [
-            'enabled' => (bool) env('PDF_WATERMARK_EDGE_CREDIT', true),
-            'opacity' => 0.45,
-            'colour' => env('PDF_WATERMARK_EDGE_COLOUR', '#2F5D9B'),
-            'blend_mode' => 'Multiply',
-            'font_size_per_mm' => 6 / 210,
-            'min_font_size' => 4.0,
-            'inset_mm' => 1.5,
-        ],
     ],
 
     'hardening' => [

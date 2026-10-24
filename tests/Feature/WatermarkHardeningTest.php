@@ -180,24 +180,7 @@ test('pages with real text are not flattened', function (): void {
     expect(extractedText($output))->toContain('Explain the process state diagram');
 })->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
 
-test('the credit is repeated along the bottom edge of the content', function (): void {
-    config()->set('pdf.watermark.stamp.opacity', 0.0);
-
-    $input = makeHardeningPdf($this->workspace.'/text.pdf', ['Short question']);
-    $withEdge = $this->workspace.'/edge.pdf';
-    $withoutEdge = $this->workspace.'/plain.pdf';
-
-    app(PdfCompressor::class)->compressWithWatermark($input, $withEdge, 'Uploaded by Sourov');
-    config()->set('pdf.watermark.edge.enabled', false);
-    app(PdfCompressor::class)->compressWithWatermark($input, $withoutEdge, 'Uploaded by Sourov');
-
-    expect(darkestGreyIn($withEdge, 0.98, 1.0))->toBeLessThan(230)
-        ->and(darkestGreyIn($withoutEdge, 0.98, 1.0))->toBe(255);
-})->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
-
 test('the trace id is hidden in the page text and the document info', function (): void {
-    config()->set('pdf.watermark.edge.enabled', false);
-
     $input = makeHardeningPdf($this->workspace.'/scan.pdf', [null]);
     $output = $this->workspace.'/out.pdf';
 
@@ -302,7 +285,7 @@ function lightestGreyInContent(string $pdfPath): int
     [$width, $height] = [(int) $header[1], (int) $header[2]];
     $pixels = substr($bitmap, strlen($header[0]));
 
-    // Skip the header band and the edge credits along the right and bottom.
+    // Skip the header band and the page margins.
     $lightest = 0;
 
     for ($y = (int) ($height * 0.1); $y < (int) ($height * 0.9); $y++) {

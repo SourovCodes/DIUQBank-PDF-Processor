@@ -87,7 +87,7 @@ class PdfCompressor
     /**
      * Watermark a document in a way that resists stripping.
      *
-     * The page content and the marks (header, edge credits, stamps) are built as
+     * The page content and the marks (header and stamps) are built as
      * separate documents so the marks' text can be outlined on its own, without
      * touching the document's real text. They are then laid on top of each
      * other, scanned pages are flattened into images with the marks in their
@@ -510,10 +510,6 @@ class PdfCompressor
             $pdf->AddPage($page['width'] > $totalHeight ? 'L' : 'P', [$page['width'], $totalHeight]);
             $this->drawWatermarkHeader($pdf, new WatermarkHeader($page['width']), $headerText);
 
-            if ((bool) config('pdf.watermark.edge.enabled')) {
-                $this->drawEdgeCredits($pdf, $page['width'], $page['contentHeight'], $page['headerHeight'], $headerText);
-            }
-
             if ($stampText !== null) {
                 $this->drawWatermarkStamps($pdf, new WatermarkStamp($page['width'], $page['contentHeight']), $page['headerHeight'], $stampText);
             }
@@ -623,45 +619,6 @@ class PdfCompressor
         }
 
         $pdf->Output('F', $outputPath);
-    }
-
-    /**
-     * Print the credit small along the right and bottom edges of the content.
-     */
-    private function drawEdgeCredits(StampablePdf $pdf, float $pageWidth, float $contentHeight, float $offsetY, string $text): void
-    {
-        $text = $this->toCoreFontEncoding($text);
-        $inset = (float) config('pdf.watermark.edge.inset_mm');
-        [$red, $green, $blue] = $this->rgbFromHex((string) config('pdf.watermark.edge.colour'));
-        $blendMode = (string) config('pdf.watermark.edge.blend_mode');
-        $opacity = (float) config('pdf.watermark.edge.opacity');
-
-        $edges = [
-            // Along the right edge, reading upwards.
-            ['length' => $contentHeight, 'angle' => 90.0, 'centre' => fn (float $glyphHeight): array => [$pageWidth - $inset - $glyphHeight / 2, $offsetY + $contentHeight / 2]],
-            // Along the bottom edge.
-            ['length' => $pageWidth, 'angle' => 0.0, 'centre' => fn (float $glyphHeight): array => [$pageWidth / 2, $offsetY + $contentHeight - $inset - $glyphHeight / 2]],
-        ];
-
-        foreach ($edges as $edge) {
-            $fontSize = max(
-                (float) config('pdf.watermark.edge.min_font_size'),
-                $pageWidth * (float) config('pdf.watermark.edge.font_size_per_mm'),
-            );
-
-            $pdf->SetFont('Arial', '', $fontSize);
-            $available = $edge['length'] * 0.9;
-
-            if ($pdf->GetStringWidth($text) > $available) {
-                $fontSize = max((float) config('pdf.watermark.edge.min_font_size'), $fontSize * $available / $pdf->GetStringWidth($text));
-                $pdf->SetFont('Arial', '', $fontSize);
-            }
-
-            [$centreX, $centreY] = ($edge['centre'])($fontSize * 25.4 / 72);
-
-            $pdf->SetTextColor($red, $green, $blue);
-            $pdf->rotatedText($text, $centreX, $centreY, $edge['angle'], $opacity, $blendMode);
-        }
     }
 
     /**
