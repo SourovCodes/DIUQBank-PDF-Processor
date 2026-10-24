@@ -164,7 +164,8 @@ return [
         | - `outline_marks` turns the marks' text into vector shapes, so text
         |   filters and "delete all text" tools cannot find them.
         | - `bake_scanned_pages` flattens pages holding (almost) no text into a
-        |   single image with the marks painted into its pixels. Pages with up
+        |   single image with the stamps painted into its pixels. The header
+        |   credit stays vector on top, so it remains crisp. Pages with up
         |   to `scanned_page_max_characters` characters of text count as scans,
         |   which tolerates stray labels such as a scanner app's credit.
         | - `lock_editing` encrypts the result with a random owner password that

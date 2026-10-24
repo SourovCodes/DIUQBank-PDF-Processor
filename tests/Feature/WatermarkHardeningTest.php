@@ -142,7 +142,7 @@ test('watermark text is outlined so text tools cannot find it', function (): voi
 
 test('marks on a scanned page survive text filtering', function (): void {
     config()->set('pdf.hardening.bake_scanned_pages', true);
-    config()->set('pdf.hardening.outline_marks', false);
+    config()->set('pdf.hardening.outline_marks', true);
 
     $input = makeHardeningPdf($this->workspace.'/scan.pdf', [null]);
     $output = $this->workspace.'/out.pdf';
@@ -151,9 +151,28 @@ test('marks on a scanned page survive text filtering', function (): void {
 
     $stripped = stripText($output, $this->workspace.'/stripped.pdf');
 
-    // The header band (top 3% of the page) still holds dark credit text.
+    // The outlined header (top 3% of the page) still holds dark credit text.
     expect(darkestGreyIn($stripped, 0.0, 0.03))->toBeLessThan(128)
         ->and(extractedText($output))->not->toContain('Uploaded by Sourov');
+})->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
+
+test('the header stays vector while the stamps are baked into a scanned page', function (): void {
+    config()->set('pdf.hardening.bake_scanned_pages', true);
+    config()->set('pdf.watermark.stamp.opacity', 0.8);
+
+    $input = makeHardeningPdf($this->workspace.'/scan.pdf', [null]);
+    $output = $this->workspace.'/out.pdf';
+
+    app(PdfCompressor::class)->compressWithCreditAndWatermark($input, $output, 'Uploaded by Sourov', 'DIUQBank.com');
+
+    // Dropping every image removes the flattened scan and the stamps painted
+    // into it, but not the header drawn over it.
+    $withoutImages = $this->workspace.'/no-images.pdf';
+    Process::run(['gs', '-sDEVICE=pdfwrite', '-dNOPAUSE', '-dBATCH', '-dQUIET', '-dFILTERIMAGE', '-sOutputFile='.$withoutImages, $output])->throw();
+
+    expect(darkestGreyIn($withoutImages, 0.0, 0.03))->toBeLessThan(128)
+        ->and(darkestGreyIn($withoutImages, 0.05, 1.0))->toBe(255)
+        ->and(darkestGreyIn($output, 0.05, 1.0))->toBeLessThan(255);
 })->skip(fn (): bool => ! hardeningTestGhostscriptIsInstalled(), 'Ghostscript is not installed.');
 
 test('without hardening the marks are stripped by text filtering', function (): void {

@@ -87,11 +87,12 @@ class PdfCompressor
     /**
      * Watermark a document in a way that resists stripping.
      *
-     * The page content and the marks (header and stamps) are built as
-     * separate documents so the marks' text can be outlined on its own, without
-     * touching the document's real text. They are then laid on top of each
-     * other, scanned pages are flattened into images with the marks in their
-     * pixels, trace text is added, and the result is compressed and locked.
+     * The page content, the stamps and the header are built as separate
+     * documents so the marks' text can be outlined on its own, without touching
+     * the document's real text. The stamps are laid over the content and
+     * scanned pages are flattened into images with the stamps in their pixels.
+     * The header goes on top afterwards so it stays crisp vector shapes, then
+     * trace text is added and the result is compressed and locked.
      */
     private function compressWithOverlay(string $inputPath, string $outputPath, string $headerText, ?string $stampText, PageLayout $layout, ?string $traceId): void
     {
@@ -114,12 +115,15 @@ class PdfCompressor
                 'watermarking',
             );
 
-            $this->drawMarksWithFpdf($workspace.'/marks.pdf', $pages, $headerText, $stampText);
-            $marksPath = $this->outlineText($workspace.'/marks.pdf', $workspace.'/marks-outlined.pdf');
-            $this->overlayWithFpdi($workspace.'/content.pdf', $marksPath, $workspace.'/composed.pdf');
+            $this->drawMarksWithFpdf($workspace.'/stamps.pdf', $pages, null, $stampText);
+            $stampsPath = $this->outlineText($workspace.'/stamps.pdf', $workspace.'/stamps-outlined.pdf');
+            $this->overlayWithFpdi($workspace.'/content.pdf', $stampsPath, $workspace.'/composed.pdf');
 
             $bakedImages = $this->bakeScannedPages($inputPath, $workspace.'/composed.pdf', $workspace);
-            $this->assembleWithFpdi($workspace.'/composed.pdf', $bakedImages, $workspace.'/assembled.pdf', $traceId);
+
+            $this->drawMarksWithFpdf($workspace.'/header.pdf', $pages, $headerText, null);
+            $headerPath = $this->outlineText($workspace.'/header.pdf', $workspace.'/header-outlined.pdf');
+            $this->assembleWithFpdi($workspace.'/composed.pdf', $bakedImages, $headerPath, $workspace.'/assembled.pdf', $traceId);
 
             $this->runGhostscript(
                 $workspace.'/assembled.pdf',
@@ -496,11 +500,12 @@ class PdfCompressor
     }
 
     /**
-     * Draw only the marks, on pages matching the laid-out content.
+     * Draw only the given marks (header, stamps or both), on pages matching the
+     * laid-out content.
      *
      * @param  array<int, array{width: float, contentHeight: float, headerHeight: float}>  $pages
      */
-    private function drawMarksWithFpdf(string $outputPath, array $pages, string $headerText, ?string $stampText): void
+    private function drawMarksWithFpdf(string $outputPath, array $pages, ?string $headerText, ?string $stampText): void
     {
         $pdf = $this->newDocument();
 
@@ -508,7 +513,10 @@ class PdfCompressor
             $totalHeight = $page['contentHeight'] + $page['headerHeight'];
 
             $pdf->AddPage($page['width'] > $totalHeight ? 'L' : 'P', [$page['width'], $totalHeight]);
-            $this->drawWatermarkHeader($pdf, new WatermarkHeader($page['width']), $headerText);
+
+            if ($headerText !== null) {
+                $this->drawWatermarkHeader($pdf, new WatermarkHeader($page['width']), $headerText);
+            }
 
             if ($stampText !== null) {
                 $this->drawWatermarkStamps($pdf, new WatermarkStamp($page['width'], $page['contentHeight']), $page['headerHeight'], $stampText);
@@ -569,7 +577,7 @@ class PdfCompressor
     }
 
     /**
-     * Render the scanned pages of the composed document to JPEG, marks and all.
+     * Render the scanned pages of the composed document to JPEG, stamps and all.
      * Pages are judged on the original document, before any marks were added.
      *
      * @return array<int, string> JPEG paths keyed by 1-indexed page number
@@ -589,17 +597,25 @@ class PdfCompressor
     }
 
     /**
-     * Swap baked pages in for their vector originals and add the trace text.
+     * Swap baked pages in for their vector originals, lay the header over every
+     * page and add the trace text.
+     *
+     * The header's white band covers the blank strip the baked image holds in
+     * its place, so the credit itself is never part of the pixels.
      *
      * @param  array<int, string>  $bakedImages  JPEG paths keyed by 1-indexed page number
      */
-    private function assembleWithFpdi(string $composedPath, array $bakedImages, string $outputPath, ?string $traceId): void
+    private function assembleWithFpdi(string $composedPath, array $bakedImages, string $headerPath, string $outputPath, ?string $traceId): void
     {
         $pdf = $this->newDocument();
         $pageCount = $pdf->setSourceFile($composedPath);
 
         for ($page = 1; $page <= $pageCount; $page++) {
+            $pdf->setSourceFile($composedPath);
             $templateId = $pdf->importPage($page);
+            $pdf->setSourceFile($headerPath);
+            $headerId = $pdf->importPage($page);
+
             $size = $pdf->getTemplateSize($templateId);
             $width = (float) $size['width'];
             $height = (float) $size['height'];
@@ -611,6 +627,8 @@ class PdfCompressor
             } else {
                 $pdf->useTemplate($templateId, 0, 0, $width, $height);
             }
+
+            $pdf->useTemplate($headerId, 0, 0, $width, $height);
 
             if ($traceId !== null) {
                 $pdf->SetFont('Arial', '', 4);
